@@ -1,0 +1,27 @@
+# permissions for end users to edit guacamoles.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: guacamole-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: guacamole-editor-role
+rules:
+- apiGroups:
+  - guacamole.guacamole.io
+  resources:
+  - guacamoles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - guacamole.guacamole.io
+  resources:
+  - guacamoles/status
+  verbs:
+  - get

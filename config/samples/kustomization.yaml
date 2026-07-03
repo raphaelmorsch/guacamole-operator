@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- guacamole_v1alpha1_guacamole.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

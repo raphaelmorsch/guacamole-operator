@@ -1,0 +1,21 @@
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: Guacamole
+metadata:
+  name: guacamole
+  namespace: guacamole
+spec:
+  guacamoleImage: guacamole/guacamole:1.6.0
+  guacdImage: guacamole/guacd:1.6.0
+  mysqlImage: mysql:8.0
+  replicas: 1
+  guacdReplicas: 1
+  logLevel: info
+  database:
+    user: guacamole_user
+    password: guacamole_pass
+    rootPassword: rootpass123
+    name: guacamole_db
+    storageSize: 5Gi
+  route:
+    enabled: true
+    tlsTermination: edge

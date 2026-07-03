@@ -1,0 +1,114 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "guacamole.guacamole.io/v1alpha1",
+          "kind": "Guacamole",
+          "metadata": {
+            "name": "guacamole",
+            "namespace": "guacamole"
+          },
+          "spec": {
+            "guacamoleImage": "guacamole/guacamole:1.6.0",
+            "guacdImage": "guacamole/guacd:1.6.0",
+            "mysqlImage": "mysql:8.0",
+            "replicas": 1,
+            "guacdReplicas": 1,
+            "logLevel": "info",
+            "database": {
+              "user": "guacamole_user",
+              "password": "guacamole_pass",
+              "rootPassword": "rootpass123",
+              "name": "guacamole_db",
+              "storageSize": "5Gi"
+            },
+            "route": {
+              "enabled": true,
+              "tlsTermination": "edge"
+            }
+          }
+        }
+      ]
+    capabilities: Full Lifecycle
+    categories: Networking
+    containerImage: guacamole.io/guacamole-operator:0.0.1
+    description: Operator to deploy Apache Guacamole on OpenShift for browser-based
+      RDP/VNC/SSH access.
+    operatorframework.io/cluster-monitoring: "true"
+    operatorframework.io/suggested-namespace: guacamole-operator-system
+    operators.operatorframework.io/builder: operator-sdk-v1.37.0
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+    repository: https://github.com/raphaelmorsch/guacamole-operator
+  name: guacamole-operator.v0.0.1
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: Guacamole is the Schema for the guacamoles API.
+      displayName: Guacamole
+      kind: Guacamole
+      name: guacamoles.guacamole.guacamole.io
+      version: v1alpha1
+  description: |
+    ## Guacamole Operator for OpenShift
+
+    This operator automates the deployment of **Apache Guacamole** on Red Hat OpenShift,
+    based on the [guacamole-rdp](https://github.com/raphaelmorsch/guacamole-rdp) reference implementation.
+
+    For each `Guacamole` custom resource, the operator provisions:
+
+    - MySQL database with persistent storage
+    - guacd proxy daemon (FreeRDP/VNC/SSH backend)
+    - Guacamole web application with automatic schema initialization
+    - OpenShift Route for browser access
+
+    The deployment is **rootless** and respects OpenShift Security Context Constraints (SCC).
+
+    ### Features
+
+    - Declarative management via Custom Resource
+    - Automatic database schema initialization
+    - FreeRDP certificate store workaround (emptyDir mount)
+    - OpenShift Route exposure with TLS edge termination
+    - Configurable images, replicas, and storage
+  displayName: Guacamole Operator
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: true
+    type: OwnNamespace
+  - supported: true
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - guacamole
+  - rdp
+  - remote-desktop
+  - openshift
+  - virtualization
+  links:
+  - name: Guacamole Operator
+    url: https://github.com/raphaelmorsch/guacamole-operator
+  - name: Reference Implementation
+    url: https://github.com/raphaelmorsch/guacamole-rdp
+  maintainers:
+  - email: raphael.morsch@example.com
+    name: Raphael Morsch
+  maturity: alpha
+  minKubeVersion: 1.25.0
+  provider:
+    name: Raphael Morsch
+    url: https://github.com/raphaelmorsch
+  version: 0.0.1
