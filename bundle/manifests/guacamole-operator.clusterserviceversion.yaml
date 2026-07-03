@@ -35,7 +35,7 @@ metadata:
     capabilities: Full Lifecycle
     categories: Networking
     containerImage: guacamole.io/guacamole-operator:0.0.1
-    createdAt: "2026-07-03T00:47:46Z"
+    createdAt: "2026-07-03T01:28:16Z"
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"

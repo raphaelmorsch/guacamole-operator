@@ -25,3 +25,12 @@ go.work
 *.swp
 *.swo
 *~
+
+# OLM / opm build artifacts (generated locally, not source)
+bundle_tmp*/
+database/
+index.Dockerfile
+index.Dockerfile*
+catalog/
+dist/
+cover.out
