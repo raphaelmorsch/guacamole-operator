@@ -1,8 +1,13 @@
+# OperatorGroup global (AllNamespaces): sem targetNamespaces.
+# O operator observa recursos Guacamole em todos os namespaces do cluster.
+#
+# Para restringir ao próprio namespace do operator (OwnNamespace), use:
+# spec:
+#   targetNamespaces:
+#   - guacamole-operator-system
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
   name: guacamole-operator
   namespace: guacamole-operator-system
-spec:
-  targetNamespaces:
-  - guacamole-operator-system
+spec: {}

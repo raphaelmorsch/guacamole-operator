@@ -42,17 +42,16 @@ flowchart LR
 
 ## Tutorial completo — do zero ao Operator Hub
 
-Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e OpenShift 4.x.
+Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e OpenShift 4.x. A versão estável atual é **0.0.4**.
 
 ### Visão geral das fases
 
 | Fase | O que faz | Resultado esperado |
 |---|---|---|
-| 1 | Compilar e buildar imagens | 3 imagens locais |
-| 2 | Push para registry do OpenShift | Imagens no cluster |
-| 3 | Registrar catálogo OLM | Operator no Hub |
-| 4 | Corrigir imagens do deployment | CSV `Succeeded` |
-| 5 | Criar instância Guacamole | Stack rodando |
+| 1 | Compilar e buildar imagem do operator | Imagem `amd64` local |
+| 2 | Push para registry do OpenShift + bundle/catalog | 3 imagens no cluster |
+| 3 | Registrar catálogo OLM e instalar | CSV `Succeeded` |
+| 4 | Criar instância Guacamole | Stack rodando |
 
 ---
 
@@ -61,7 +60,7 @@ Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e O
 Defina uma vez e reutilize em todos os passos:
 
 ```bash
-export VERSION=0.0.1
+export VERSION=0.0.4
 export NAMESPACE=guacamole-operator-system
 ```
 
@@ -97,29 +96,6 @@ podman inspect guacamole.io/guacamole-operator:${VERSION} \
 # Esperado: amd64
 ```
 
-Gerar e buildar o **bundle OLM** (manifests + CSV):
-
-```bash
-make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha \
-  IMG=guacamole.io/guacamole-operator:${VERSION}
-
-make bundle-build BUNDLE_IMG=guacamole.io/guacamole-operator-bundle:${VERSION} \
-  CONTAINER_TOOL=podman
-```
-
-Verificar imagens locais (catalog será gerada na Fase 2):
-
-```bash
-podman images | grep guacamole
-```
-
-Esperado neste ponto:
-
-```
-guacamole.io/guacamole-operator           0.0.1
-guacamole.io/guacamole-operator-bundle    0.0.1
-```
-
 ---
 
 ### Fase 2 — Push para o registry do OpenShift
@@ -153,26 +129,36 @@ oc new-project ${NAMESPACE}
 podman login --tls-verify=false \
   -u $(oc whoami) \
   -p $(oc whoami -t) \
-  default-route-openshift-image-registry.apps.<cluster>.com
+  ${REGISTRY}
 ```
 
-Ou use o host retornado por `$REGISTRY`.
-
-#### 2c. Tag e push do operator e bundle
+#### 2c. Tag e push do operator
 
 ```bash
 podman tag guacamole.io/guacamole-operator:${VERSION} \
   ${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
-podman tag guacamole.io/guacamole-operator-bundle:${VERSION} \
-  ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
 
 podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
-podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
 ```
 
 > **Importante:** crie o namespace **antes** do push. Push sem namespace existente retorna `denied`.
 
-#### 2d. Gerar e push da catalog image (crítico no M1)
+#### 2d. Gerar bundle OLM com a imagem correta do registry
+
+> **Crítico:** passe `IMG` apontando para o registry do OpenShift. Se usar `guacamole.io/...`, o CSV embutirá uma imagem inexistente e o deployment ficará em `ImagePullBackOff`.
+
+```bash
+make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha \
+  IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
+
+make bundle-build \
+  BUNDLE_IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION} \
+  CONTAINER_TOOL=podman
+
+podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
+```
+
+#### 2e. Gerar e push da catalog image (crítico no M1)
 
 O `bin/opm index add` sem `--generate` produz imagem `arm64` no Mac. Gere o Dockerfile e build com plataforma explícita:
 
@@ -210,23 +196,23 @@ oc get imagestream -n ${NAMESPACE}
 O namespace `openshift-marketplace` precisa puxar imagens do seu namespace:
 
 ```bash
-oc policy add-role-to-group system:image-puller \
+oc adm policy add-role-to-group system:image-puller \
   system:serviceaccounts:openshift-marketplace \
   -n ${NAMESPACE}
 ```
 
 #### 3b. Aplicar CatalogSource
 
-Use a URL **interna** do registry (funciona em qualquer OpenShift):
+Atualize a tag da imagem em `config/olm/catalogsource.yaml` para a versão desejada, depois aplique:
 
 ```bash
 oc apply -f config/olm/catalogsource.yaml
 ```
 
-O arquivo usa:
+O arquivo usa a URL **interna** do registry (funciona em qualquer OpenShift):
 
 ```yaml
-image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-operator-catalog:0.0.1
+image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-operator-catalog:0.0.4
 ```
 
 Aguarde o pod do catálogo ficar `Running`:
@@ -238,6 +224,8 @@ oc get pods -n openshift-marketplace | grep guacamole
 Esperado: `1/1 Running` (não `CrashLoopBackOff` nem `ImagePullBackOff`).
 
 #### 3c. Instalar o operator via Subscription
+
+O `OperatorGroup` usa `spec: {}` para instalação **AllNamespaces** (o operator observa CRs em todos os namespaces):
 
 ```bash
 oc apply -f config/olm/operatorgroup.yaml
@@ -251,20 +239,7 @@ oc get packagemanifest | grep guacamole
 oc get csv -n ${NAMESPACE}
 ```
 
----
-
-### Fase 4 — Corrigir imagens do controller
-
-O bundle gerado referencia `guacamole.io/guacamole-operator` e `kube-rbac-proxy:v0.16.0` (inexistente). Corrija no cluster:
-
-```bash
-oc set image deployment/guacamole-operator-controller-manager \
-  manager=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION} \
-  kube-rbac-proxy=quay.io/brancz/kube-rbac-proxy:v0.18.2 \
-  -n ${NAMESPACE}
-```
-
-Aguarde o pod ficar pronto:
+Aguarde o controller ficar pronto:
 
 ```bash
 oc get pods -n ${NAMESPACE} -w
@@ -272,17 +247,20 @@ oc get pods -n ${NAMESPACE} -w
 
 Esperado: `2/2 Running`.
 
-CSV instalado:
-
 ```bash
 oc get csv guacamole-operator.v${VERSION} -n ${NAMESPACE}
 ```
 
 Esperado: `PHASE: Succeeded`.
 
+A partir da versão **0.0.3+**, o CSV já embute as imagens corretas:
+
+- `quay.io/brancz/kube-rbac-proxy:v0.18.2`
+- Imagem do operator no registry do OpenShift
+
 ---
 
-### Fase 5 — Verificar no Web Console
+### Fase 4 — Verificar no Web Console
 
 1. Acesse **Operators → Operator Hub**
 2. Busque **"Guacamole Operator"**
@@ -290,7 +268,9 @@ Esperado: `PHASE: Succeeded`.
 
 ---
 
-### Fase 6 — Criar uma instância Guacamole
+### Fase 5 — Criar uma instância Guacamole
+
+O operator pode criar instâncias em **qualquer namespace** (OperatorGroup global):
 
 ```bash
 oc new-project guacamole
@@ -338,18 +318,155 @@ spec:
 
 ---
 
+## Publicar uma nova versão
+
+Para publicar uma correção (ex.: `0.0.5`):
+
+```bash
+export VERSION=0.0.5
+
+# 1. Rebuild e push (mesmo fluxo da Fase 1 + 2)
+podman build --platform linux/amd64 -t guacamole.io/guacamole-operator:${VERSION} .
+podman tag guacamole.io/guacamole-operator:${VERSION} \
+  ${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
+podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
+
+make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha \
+  IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
+make bundle-build BUNDLE_IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION} CONTAINER_TOOL=podman
+podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
+
+bin/opm index add --pull-tool podman --mode semver --generate -d index.Dockerfile \
+  --bundles ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
+podman build --platform linux/amd64 -f index.Dockerfile \
+  -t ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION} .
+podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION}
+
+# 2. Atualizar tag em config/olm/catalogsource.yaml e aplicar
+oc apply -f config/olm/catalogsource.yaml
+oc delete pod -n openshift-marketplace -l olm.catalogSource=guacamole-operator-catalog
+
+# 3. Aguardar upgrade automático ou recriar subscription se ficar presa (ver Troubleshooting)
+oc get csv -n ${NAMESPACE}
+```
+
+---
+
+## Troubleshooting
+
+### `Table 'guacamole_db.guacamole_user' doesn't exist`
+
+**Causa:** o init container `apply-initdb` rodou antes do MySQL estar pronto. O script antigo não aguardava a conexão e imprimia "complete" mesmo com falha.
+
+**Correção:** versão **0.0.4+** aguarda o MySQL (retry até 5 min) e falha explicitamente se o schema não for aplicado.
+
+**Recuperação manual** (instância já criada com schema vazio):
+
+```bash
+# Gerar SQL a partir do pod Guacamole
+oc exec -n <namespace> deploy/<guacamole-deploy> -- \
+  /opt/guacamole/bin/initdb.sh --mysql > /tmp/initdb.sql
+
+# Aplicar no MySQL
+oc cp /tmp/initdb.sql <namespace>/<mysql-pod>:/tmp/initdb.sql
+oc exec -n <namespace> <mysql-pod> -- sh -c \
+  'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u "$MYSQL_USER" "$MYSQL_DATABASE" < /tmp/initdb.sql'
+```
+
+Ou delete o deployment Guacamole e aguarde o operator recriar (com operator 0.0.4+).
+
+---
+
+### Deployment do operator em `ImagePullBackOff`
+
+**Causa comum:** bundle gerado com `IMG=guacamole.io/...` (host inexistente) ou `kube-rbac-proxy` antigo.
+
+**Solução:** regenere o bundle com `IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}` e publique nova versão.
+
+**Workaround** (versões 0.0.1 / 0.0.2):
+
+```bash
+oc set image deployment/guacamole-operator-controller-manager \
+  manager=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION} \
+  kube-rbac-proxy=quay.io/brancz/kube-rbac-proxy:v0.18.2 \
+  -n ${NAMESPACE}
+```
+
+---
+
+### Catalog pod `Exec format error` ou `CrashLoopBackOff`
+
+**Causa:** catalog image buildada em `arm64` no Mac.
+
+**Solução:** use `bin/opm index add --generate` + `podman build --platform linux/amd64`.
+
+---
+
+### Catalog pod `ImagePullBackOff`
+
+**Causa:** `openshift-marketplace` sem permissão para puxar imagens do seu namespace.
+
+**Solução:**
+
+```bash
+oc adm policy add-role-to-group system:image-puller \
+  system:serviceaccounts:openshift-marketplace \
+  -n ${NAMESPACE}
+```
+
+Use a URL **interna** do registry no `CatalogSource` (`image-registry.openshift-image-registry.svc:5000/...`).
+
+---
+
+### `This operator requires an OperatorGroup` ou erro de `targetNamespaces`
+
+**Causa:** `OperatorGroup` com `targetNamespaces` incorreto para instalação global.
+
+**Solução:** use `spec: {}` em `config/olm/operatorgroup.yaml` (AllNamespaces).
+
+---
+
+### Subscription presa em versão antiga (`UpgradePending`)
+
+**Causa:** install plan obsoleto após atualizar o catálogo.
+
+**Solução:**
+
+```bash
+oc delete subscription guacamole-operator -n ${NAMESPACE}
+oc delete csv guacamole-operator.v<versao-antiga> -n ${NAMESPACE}  # se existir
+oc apply -f config/olm/subscription.yaml
+```
+
+Confirme que o `packagemanifest` expõe a versão nova:
+
+```bash
+oc get packagemanifest guacamole-operator -n openshift-marketplace \
+  -o jsonpath='{.status.channels[0].currentCSV}{"\n"}'
+```
+
+---
+
+### Thumbnail ausente no Operator Hub
+
+O ícone vem do campo `spec.icon` no CSV (`config/manifests/guacamole-icon.png`). Após alterar, regenere bundle + catalog, faça push e reinicie o pod do catálogo (ver seção **Ícone no Software Catalog**).
+
+---
+
 ## O que NÃO fazer (lições aprendidas)
 
 | Abordagem | Por que falha |
 |---|---|
 | `make docker-buildx` no M1 | Tenta 4 arquiteturas; `go mod download` falha no buildx |
 | `guacamole.io/...` como registry | Host não existe — é só tag local |
+| `make bundle` sem `IMG=${REGISTRY}/...` | CSV referencia imagem inexistente → `ImagePullBackOff` |
 | `localhost/...` sem porta | Podman interpreta como registry HTTPS na porta 443 |
 | `bin/opm index add` sem `--generate` no M1 | Catalog image sai `arm64` → `Exec format error` no cluster |
 | `DOCKER_DEFAULT_PLATFORM` com `opm` | Variável ignorada pelo `opm` no `podman build` interno |
 | Push antes de `oc new-project` | Registry retorna `denied` |
 | CatalogSource com URL externa sem RBAC | `authentication required` no `openshift-marketplace` |
 | Misturar Docker e Podman | Uma ferramenta não vê imagens da outra |
+| Confiar no log "schema initialization complete" (pré-0.0.4) | Init container podia falhar silenciosamente |
 
 ---
 
@@ -388,14 +505,36 @@ make run
 ## Desinstalação
 
 ```bash
-# Remover instâncias Guacamole
-oc delete guacamole --all -n guacamole
+# Remover instâncias Guacamole (em todos os namespaces onde foram criadas)
+oc delete guacamole --all -A
 
 # Remover operator via OLM
 oc delete -f config/olm/subscription.yaml
 oc delete csv guacamole-operator.v${VERSION} -n ${NAMESPACE}
 oc delete -f config/olm/catalogsource.yaml
 oc delete -f config/olm/operatorgroup.yaml
+```
+
+---
+
+## Ícone no Software Catalog
+
+O thumbnail do Operator Hub vem do campo `spec.icon` no CSV. O ícone fonte fica em `config/manifests/guacamole-icon.png`.
+
+Após alterar o ícone, regenere o bundle e a catalog image, faça push e reinicie o pod do catálogo:
+
+```bash
+make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
+make bundle-build BUNDLE_IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION} CONTAINER_TOOL=podman
+podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
+
+bin/opm index add --pull-tool podman --mode semver --generate -d index.Dockerfile \
+  --bundles ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
+podman build --platform linux/amd64 -f index.Dockerfile \
+  -t ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION} .
+podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION}
+
+oc delete pod -n openshift-marketplace -l olm.catalogSource=guacamole-operator-catalog
 ```
 
 ---

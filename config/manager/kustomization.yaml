@@ -4,5 +4,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: guacamole.io/guacamole-operator
-  newTag: 0.0.1
+  newName: default-route-openshift-image-registry.apps.cluster-x5pjb.dynamic2.redhatworkshops.io/guacamole-operator-system/guacamole-operator
+  newTag: 0.0.4

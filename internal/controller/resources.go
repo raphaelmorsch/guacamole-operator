@@ -413,7 +413,7 @@ func desiredGuacamoleDeployment(g *guacamolev1alpha1.Guacamole) *appsv1.Deployme
 							Image:           guacamoleImage,
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command:         []string{"/bin/sh", "-c"},
-							Args:            []string{"/opt/guacamole/bin/initdb.sh --mysql > /initdb/initdb.sql"},
+							Args:            []string{"set -e; /opt/guacamole/bin/initdb.sh --mysql > /initdb/initdb.sql; test -s /initdb/initdb.sql"},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "initdb", MountPath: "/initdb"},
 							},
@@ -424,13 +424,30 @@ func desiredGuacamoleDeployment(g *guacamolev1alpha1.Guacamole) *appsv1.Deployme
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command:         []string{"/bin/sh", "-c"},
 							Args: []string{`
+set -e
+
+echo "Waiting for MySQL to be ready..."
+attempt=0
+max_attempts=60
+until mysql -h "$MYSQL_HOSTNAME" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "SELECT 1" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge "$max_attempts" ]; then
+    echo "MySQL did not become ready in time."
+    exit 1
+  fi
+  echo "MySQL not ready (attempt $attempt/$max_attempts), waiting..."
+  sleep 5
+done
+
 echo "Checking if Guacamole DB schema is already initialized..."
-if mysql -h $MYSQL_HOSTNAME -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE \
+if mysql -h "$MYSQL_HOSTNAME" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" \
   -e "SELECT 1 FROM guacamole_user LIMIT 1;" >/dev/null 2>&1; then
   echo "Guacamole schema already present, skipping initialization."
 else
   echo "Initializing Guacamole schema..."
-  mysql -h $MYSQL_HOSTNAME -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE < /initdb/initdb.sql
+  mysql -h "$MYSQL_HOSTNAME" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" < /initdb/initdb.sql
+  mysql -h "$MYSQL_HOSTNAME" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" \
+    -e "SELECT 1 FROM guacamole_user LIMIT 1;" >/dev/null
   echo "Guacamole schema initialization complete."
 fi
 `},
