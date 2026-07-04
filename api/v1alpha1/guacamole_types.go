@@ -61,6 +61,44 @@ type GuacamoleSpec struct {
 	// Resources defines resource requests and limits for Guacamole containers.
 	// +optional
 	Resources GuacamoleResources `json:"resources,omitempty"`
+
+	// Autoscaling configures horizontal pod autoscaling for the Guacamole web deployment.
+	// +optional
+	Autoscaling AutoscalingSpec `json:"autoscaling,omitempty"`
+
+	// GuacdAutoscaling configures horizontal pod autoscaling for the guacd proxy deployment.
+	// +optional
+	GuacdAutoscaling AutoscalingSpec `json:"guacdAutoscaling,omitempty"`
+}
+
+// AutoscalingSpec configures an HPA for a deployment.
+type AutoscalingSpec struct {
+	// Enabled creates a HorizontalPodAutoscaler for the target deployment.
+	// +kubebuilder:default=false
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MinReplicas is the minimum number of pods.
+	// Defaults to spec.replicas or spec.guacdReplicas when unset.
+	// +kubebuilder:validation:Minimum=1
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+
+	// MaxReplicas is the maximum number of pods.
+	// +kubebuilder:default=5
+	// +kubebuilder:validation:Minimum=1
+	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
+
+	// TargetMemoryUtilizationPercentage scales up when average memory usage
+	// exceeds this percentage of the configured memory request.
+	// +kubebuilder:default=80
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	TargetMemoryUtilizationPercentage *int32 `json:"targetMemoryUtilizationPercentage,omitempty"`
+
+	// TargetCPUUtilizationPercentage optionally scales when average CPU usage
+	// exceeds this percentage of the configured CPU request.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	TargetCPUUtilizationPercentage *int32 `json:"targetCPUUtilizationPercentage,omitempty"`
 }
 
 // DatabaseSpec configures the MySQL backend used by Guacamole.
@@ -104,6 +142,10 @@ type RouteSpec struct {
 	// +kubebuilder:default="edge"
 	// +kubebuilder:validation:Enum=edge;passthrough;reencrypt
 	TLSTermination string `json:"tlsTermination,omitempty"`
+
+	// Path is the HTTP path exposed by the Route. Guacamole serves the web UI under /guacamole.
+	// +kubebuilder:default="/guacamole"
+	Path string `json:"path,omitempty"`
 }
 
 // GuacamoleResources defines resource requirements for the stack components.

@@ -314,7 +314,23 @@ spec:
   route:
     enabled: true
     tlsTermination: edge
+    path: /guacamole
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetMemoryUtilizationPercentage: 80
+    # targetCPUUtilizationPercentage: 80  # opcional
+  guacdAutoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetMemoryUtilizationPercentage: 80
 ```
+
+> **HPA por memória:** requer `requests.memory` definido nos resources do componente (o operator já aplica defaults). Com autoscaling habilitado, o operator não sobrescreve as réplicas gerenciadas pelo HPA.
+
+> **Route path:** o Guacamole serve a UI em `/guacamole`. O operator define `spec.route.path` com esse valor por padrão; o `status.routeURL` já inclui o path.
 
 ---
 
@@ -353,6 +369,14 @@ oc get csv -n ${NAMESPACE}
 ---
 
 ## Troubleshooting
+
+### HTTP 404 ao acessar a Route
+
+**Causa:** o Guacamole expõe a UI em `/guacamole`, não na raiz `/`.
+
+**Solução:** versões atuais do operator definem `spec.route.path: /guacamole` por padrão. Acesse `https://<host>/guacamole` ou confira `status.routeURL`.
+
+---
 
 ### `Table 'guacamole_db.guacamole_user' doesn't exist`
 

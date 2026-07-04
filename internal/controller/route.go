@@ -27,6 +27,7 @@ func desiredRoute(g *guacamolev1alpha1.Guacamole) *unstructured.Unstructured {
 			"name":   guacServiceName(g.Name),
 			"weight": int64(100),
 		},
+		"path": routePath(&g.Spec),
 		"port": map[string]interface{}{
 			"targetPort": "http",
 		},

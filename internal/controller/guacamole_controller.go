@@ -22,6 +22,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,6 +49,7 @@ type GuacamoleReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;secrets;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
 
@@ -137,11 +139,17 @@ func (r *GuacamoleReconciler) reconcileStack(ctx context.Context, guac *guacamol
 	if err := r.reconcileService(ctx, guac, desiredGuacdService(guac)); err != nil {
 		return fmt.Errorf("reconcile guacd service: %w", err)
 	}
+	if err := r.reconcileGuacdAutoscaling(ctx, guac); err != nil {
+		return fmt.Errorf("reconcile guacd autoscaling: %w", err)
+	}
 	if err := r.reconcileDeployment(ctx, guac, desiredGuacamoleDeployment(guac)); err != nil {
 		return fmt.Errorf("reconcile guacamole deployment: %w", err)
 	}
 	if err := r.reconcileService(ctx, guac, desiredGuacamoleService(guac)); err != nil {
 		return fmt.Errorf("reconcile guacamole service: %w", err)
+	}
+	if err := r.reconcileGuacamoleAutoscaling(ctx, guac); err != nil {
+		return fmt.Errorf("reconcile guacamole autoscaling: %w", err)
 	}
 
 	if routeEnabled(&guac.Spec) {
@@ -163,11 +171,98 @@ func (r *GuacamoleReconciler) reconcileDeployment(ctx context.Context, owner *gu
 		if err := controllerutil.SetControllerReference(owner, deploy, r.Scheme); err != nil {
 			return err
 		}
+		preserveReplicas := deploymentAutoscalingEnabled(owner, desired) && !deploy.CreationTimestamp.IsZero()
+		currentReplicas := deploy.Spec.Replicas
 		deploy.Labels = desired.Labels
 		deploy.Spec = desired.Spec
+		if preserveReplicas && currentReplicas != nil {
+			deploy.Spec.Replicas = currentReplicas
+		}
 		return nil
 	})
 	return err
+}
+
+func deploymentAutoscalingEnabled(owner *guacamolev1alpha1.Guacamole, desired *appsv1.Deployment) bool {
+	switch desired.Name {
+	case guacDeployName(owner.Name):
+		return autoscalingEnabled(&owner.Spec)
+	case guacdDeployName(owner.Name):
+		return guacdAutoscalingEnabled(&owner.Spec)
+	default:
+		return false
+	}
+}
+
+func (r *GuacamoleReconciler) reconcileGuacamoleAutoscaling(ctx context.Context, guac *guacamolev1alpha1.Guacamole) error {
+	return r.reconcileAutoscaling(
+		ctx,
+		guac,
+		guac.Spec.Autoscaling,
+		desiredGuacamoleHPA(guac),
+		guacHPAName(guac.Name),
+		"autoscaling",
+		autoscalingMinReplicas(&guac.Spec),
+		autoscalingMaxReplicas(&guac.Spec),
+	)
+}
+
+func (r *GuacamoleReconciler) reconcileGuacdAutoscaling(ctx context.Context, guac *guacamolev1alpha1.Guacamole) error {
+	return r.reconcileAutoscaling(
+		ctx,
+		guac,
+		guac.Spec.GuacdAutoscaling,
+		desiredGuacdHPA(guac),
+		guacdHPAName(guac.Name),
+		"guacdAutoscaling",
+		guacdAutoscalingMinReplicas(&guac.Spec),
+		guacdAutoscalingMaxReplicas(&guac.Spec),
+	)
+}
+
+func (r *GuacamoleReconciler) reconcileAutoscaling(
+	ctx context.Context,
+	guac *guacamolev1alpha1.Guacamole,
+	scaling guacamolev1alpha1.AutoscalingSpec,
+	desired *autoscalingv2.HorizontalPodAutoscaler,
+	hpaName, fieldPrefix string,
+	minReplicas, maxReplicas int32,
+) error {
+	if !autoscalingSpecEnabled(scaling) {
+		return r.deleteHPAIfExists(ctx, guac, hpaName)
+	}
+
+	if maxReplicas < minReplicas {
+		return fmt.Errorf("%s.maxReplicas (%d) must be >= %s.minReplicas (%d)", fieldPrefix, maxReplicas, fieldPrefix, minReplicas)
+	}
+
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+	hpa.Name = desired.Name
+	hpa.Namespace = desired.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, hpa, func() error {
+		if err := controllerutil.SetControllerReference(guac, hpa, r.Scheme); err != nil {
+			return err
+		}
+		hpa.Labels = desired.Labels
+		hpa.Spec = desired.Spec
+		return nil
+	})
+	return err
+}
+
+func (r *GuacamoleReconciler) deleteHPAIfExists(ctx context.Context, guac *guacamolev1alpha1.Guacamole, hpaName string) error {
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      hpaName,
+		Namespace: guac.Namespace,
+	}, hpa)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return r.Delete(ctx, hpa)
 }
 
 func (r *GuacamoleReconciler) reconcileService(ctx context.Context, owner *guacamolev1alpha1.Guacamole, desired *corev1.Service) error {
@@ -247,7 +342,7 @@ func (r *GuacamoleReconciler) routeURL(ctx context.Context, guac *guacamolev1alp
 	}
 
 	if host := routeHost(route); host != "" {
-		return "https://" + host, nil
+		return "https://" + host + routePath(&guac.Spec), nil
 	}
 	return "", nil
 }
@@ -328,5 +423,6 @@ func (r *GuacamoleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&corev1.Service{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
 }

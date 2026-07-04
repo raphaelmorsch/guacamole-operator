@@ -19,3 +19,14 @@ spec:
   route:
     enabled: true
     tlsTermination: edge
+    path: /guacamole
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetMemoryUtilizationPercentage: 80
+  guacdAutoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetMemoryUtilizationPercentage: 80

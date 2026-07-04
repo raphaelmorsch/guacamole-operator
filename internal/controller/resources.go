@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,8 +20,10 @@ const (
 	mysqlServiceSuffix = "-mysql"
 	guacdDeploySuffix  = "-guacd"
 	guacdServiceSuffix = "-guacd"
+	guacdHPASuffix     = "-guacd-hpa"
 	guacDeploySuffix   = "-guacamole"
 	guacServiceSuffix  = "-guacamole"
+	guacHPASuffix      = "-guacamole-hpa"
 	routeSuffix        = "-guacamole"
 )
 
@@ -30,8 +33,10 @@ func mysqlDeployName(name string) string  { return name + mysqlDeploySuffix }
 func mysqlServiceName(name string) string { return name + mysqlServiceSuffix }
 func guacdDeployName(name string) string  { return name + guacdDeploySuffix }
 func guacdServiceName(name string) string { return name + guacdServiceSuffix }
+func guacdHPAName(name string) string     { return name + guacdHPASuffix }
 func guacDeployName(name string) string   { return name + guacDeploySuffix }
 func guacServiceName(name string) string  { return name + guacServiceSuffix }
+func guacHPAName(name string) string      { return name + guacHPASuffix }
 func routeName(name string) string        { return name + routeSuffix }
 
 func serviceFQDN(service, namespace string) string {
@@ -60,6 +65,77 @@ func routeEnabled(spec *guacamolev1alpha1.GuacamoleSpec) bool {
 		return true
 	}
 	return *spec.Route.Enabled
+}
+
+func autoscalingEnabled(spec *guacamolev1alpha1.GuacamoleSpec) bool {
+	return autoscalingSpecEnabled(spec.Autoscaling)
+}
+
+func guacdAutoscalingEnabled(spec *guacamolev1alpha1.GuacamoleSpec) bool {
+	return autoscalingSpecEnabled(spec.GuacdAutoscaling)
+}
+
+func autoscalingSpecEnabled(spec guacamolev1alpha1.AutoscalingSpec) bool {
+	if spec.Enabled == nil {
+		return false
+	}
+	return *spec.Enabled
+}
+
+func autoscalingMinReplicas(spec *guacamolev1alpha1.GuacamoleSpec) int32 {
+	return autoscalingSpecMinReplicas(spec.Autoscaling, defaultReplicas(spec))
+}
+
+func guacdAutoscalingMinReplicas(spec *guacamolev1alpha1.GuacamoleSpec) int32 {
+	return autoscalingSpecMinReplicas(spec.GuacdAutoscaling, defaultGuacdReplicas(spec))
+}
+
+func autoscalingSpecMinReplicas(spec guacamolev1alpha1.AutoscalingSpec, fallback int32) int32 {
+	if spec.MinReplicas != nil {
+		return *spec.MinReplicas
+	}
+	return fallback
+}
+
+func autoscalingMaxReplicas(spec *guacamolev1alpha1.GuacamoleSpec) int32 {
+	return autoscalingSpecMaxReplicas(spec.Autoscaling)
+}
+
+func guacdAutoscalingMaxReplicas(spec *guacamolev1alpha1.GuacamoleSpec) int32 {
+	return autoscalingSpecMaxReplicas(spec.GuacdAutoscaling)
+}
+
+func autoscalingSpecMaxReplicas(spec guacamolev1alpha1.AutoscalingSpec) int32 {
+	if spec.MaxReplicas != nil {
+		return *spec.MaxReplicas
+	}
+	return 5
+}
+
+func autoscalingTargetMemory(spec *guacamolev1alpha1.GuacamoleSpec) int32 {
+	return autoscalingSpecTargetMemory(spec.Autoscaling)
+}
+
+func guacdAutoscalingTargetMemory(spec *guacamolev1alpha1.GuacamoleSpec) int32 {
+	return autoscalingSpecTargetMemory(spec.GuacdAutoscaling)
+}
+
+func autoscalingSpecTargetMemory(spec guacamolev1alpha1.AutoscalingSpec) int32 {
+	if spec.TargetMemoryUtilizationPercentage != nil {
+		return *spec.TargetMemoryUtilizationPercentage
+	}
+	return 80
+}
+
+func routePath(spec *guacamolev1alpha1.GuacamoleSpec) string {
+	path := valueOrDefault(spec.Route.Path, "/guacamole")
+	if path == "" {
+		return "/guacamole"
+	}
+	if path[0] != '/' {
+		path = "/" + path
+	}
+	return path
 }
 
 func defaultGuacamoleResources() corev1.ResourceRequirements {
@@ -308,7 +384,7 @@ func desiredGuacdDeployment(g *guacamolev1alpha1.Guacamole) *appsv1.Deployment {
 			Labels:    labelsFor(g, "guacd"),
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: int32Ptr(defaultGuacdReplicas(&g.Spec)),
+			Replicas: int32Ptr(guacdDeploymentReplicas(g)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selectorLabelsFor(g, "guacd"),
 			},
@@ -390,7 +466,7 @@ func desiredGuacamoleDeployment(g *guacamolev1alpha1.Guacamole) *appsv1.Deployme
 			Labels:    labelsFor(g, "guacamole"),
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: int32Ptr(defaultReplicas(&g.Spec)),
+			Replicas: int32Ptr(guacamoleDeploymentReplicas(g)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selectorLabelsFor(g, "guacamole"),
 			},
@@ -503,6 +579,97 @@ func desiredGuacamoleService(g *guacamolev1alpha1.Guacamole) *corev1.Service {
 		},
 	}
 	return svc
+}
+
+func guacamoleDeploymentReplicas(g *guacamolev1alpha1.Guacamole) int32 {
+	if autoscalingEnabled(&g.Spec) {
+		return autoscalingMinReplicas(&g.Spec)
+	}
+	return defaultReplicas(&g.Spec)
+}
+
+func guacdDeploymentReplicas(g *guacamolev1alpha1.Guacamole) int32 {
+	if guacdAutoscalingEnabled(&g.Spec) {
+		return guacdAutoscalingMinReplicas(&g.Spec)
+	}
+	return defaultGuacdReplicas(&g.Spec)
+}
+
+func desiredGuacamoleHPA(g *guacamolev1alpha1.Guacamole) *autoscalingv2.HorizontalPodAutoscaler {
+	return desiredHPA(
+		g,
+		guacHPAName(g.Name),
+		"guacamole",
+		guacDeployName(g.Name),
+		g.Spec.Autoscaling,
+		autoscalingMinReplicas(&g.Spec),
+		autoscalingMaxReplicas(&g.Spec),
+		autoscalingTargetMemory(&g.Spec),
+	)
+}
+
+func desiredGuacdHPA(g *guacamolev1alpha1.Guacamole) *autoscalingv2.HorizontalPodAutoscaler {
+	return desiredHPA(
+		g,
+		guacdHPAName(g.Name),
+		"guacd",
+		guacdDeployName(g.Name),
+		g.Spec.GuacdAutoscaling,
+		guacdAutoscalingMinReplicas(&g.Spec),
+		guacdAutoscalingMaxReplicas(&g.Spec),
+		guacdAutoscalingTargetMemory(&g.Spec),
+	)
+}
+
+func desiredHPA(
+	g *guacamolev1alpha1.Guacamole,
+	hpaName, component, deployName string,
+	scaling guacamolev1alpha1.AutoscalingSpec,
+	minReplicas, maxReplicas, targetMemory int32,
+) *autoscalingv2.HorizontalPodAutoscaler {
+	metrics := []autoscalingv2.MetricSpec{
+		{
+			Type: autoscalingv2.ResourceMetricSourceType,
+			Resource: &autoscalingv2.ResourceMetricSource{
+				Name: corev1.ResourceMemory,
+				Target: autoscalingv2.MetricTarget{
+					Type:               autoscalingv2.UtilizationMetricType,
+					AverageUtilization: int32Ptr(targetMemory),
+				},
+			},
+		},
+	}
+
+	if scaling.TargetCPUUtilizationPercentage != nil {
+		metrics = append(metrics, autoscalingv2.MetricSpec{
+			Type: autoscalingv2.ResourceMetricSourceType,
+			Resource: &autoscalingv2.ResourceMetricSource{
+				Name: corev1.ResourceCPU,
+				Target: autoscalingv2.MetricTarget{
+					Type:               autoscalingv2.UtilizationMetricType,
+					AverageUtilization: scaling.TargetCPUUtilizationPercentage,
+				},
+			},
+		})
+	}
+
+	return &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      hpaName,
+			Namespace: g.Namespace,
+			Labels:    labelsFor(g, component),
+		},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: appsv1.SchemeGroupVersion.String(),
+				Kind:       "Deployment",
+				Name:       deployName,
+			},
+			MinReplicas: &minReplicas,
+			MaxReplicas: maxReplicas,
+			Metrics:     metrics,
+		},
+	}
 }
 
 func labelsFor(g *guacamolev1alpha1.Guacamole, component string) map[string]string {

@@ -49,6 +49,46 @@ spec:
           spec:
             description: GuacamoleSpec defines the desired state of a Guacamole stack.
             properties:
+              autoscaling:
+                description: Autoscaling configures horizontal pod autoscaling for
+                  the Guacamole web deployment.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled creates a HorizontalPodAutoscaler for the
+                      target deployment.
+                    type: boolean
+                  maxReplicas:
+                    default: 5
+                    description: MaxReplicas is the maximum number of pods.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  minReplicas:
+                    description: |-
+                      MinReplicas is the minimum number of pods.
+                      Defaults to spec.replicas or spec.guacdReplicas when unset.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  targetCPUUtilizationPercentage:
+                    description: |-
+                      TargetCPUUtilizationPercentage optionally scales when average CPU usage
+                      exceeds this percentage of the configured CPU request.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  targetMemoryUtilizationPercentage:
+                    default: 80
+                    description: |-
+                      TargetMemoryUtilizationPercentage scales up when average memory usage
+                      exceeds this percentage of the configured memory request.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                type: object
               database:
                 description: Database holds MySQL credentials and storage configuration.
                 properties:
@@ -83,6 +123,46 @@ spec:
                 description: GuacamoleImage is the container image for the Guacamole
                   web application.
                 type: string
+              guacdAutoscaling:
+                description: GuacdAutoscaling configures horizontal pod autoscaling
+                  for the guacd proxy deployment.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled creates a HorizontalPodAutoscaler for the
+                      target deployment.
+                    type: boolean
+                  maxReplicas:
+                    default: 5
+                    description: MaxReplicas is the maximum number of pods.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  minReplicas:
+                    description: |-
+                      MinReplicas is the minimum number of pods.
+                      Defaults to spec.replicas or spec.guacdReplicas when unset.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  targetCPUUtilizationPercentage:
+                    description: |-
+                      TargetCPUUtilizationPercentage optionally scales when average CPU usage
+                      exceeds this percentage of the configured CPU request.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  targetMemoryUtilizationPercentage:
+                    default: 80
+                    description: |-
+                      TargetMemoryUtilizationPercentage scales up when average memory usage
+                      exceeds this percentage of the configured memory request.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                type: object
               guacdImage:
                 default: guacamole/guacd:1.6.0
                 description: GuacdImage is the container image for the guacd proxy
@@ -289,6 +369,11 @@ spec:
                     type: boolean
                   hostname:
                     description: Hostname sets a custom hostname for the Route.
+                    type: string
+                  path:
+                    default: /guacamole
+                    description: Path is the HTTP path exposed by the Route. Guacamole
+                      serves the web UI under /guacamole.
                     type: string
                   tlsTermination:
                     default: edge
