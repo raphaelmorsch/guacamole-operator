@@ -22,3 +22,5 @@ resources:
 # if you do not want those helpers be installed with your Project.
 - guacamole_editor_role.yaml
 - guacamole_viewer_role.yaml
+- guacamoleconnection_editor_role.yaml
+- guacamoleconnection_viewer_role.yaml

@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/guacamole.guacamole.io_guacamoles.yaml
+- bases/guacamole.guacamole.io_guacamoleconnections.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -332,6 +332,53 @@ spec:
 
 > **Route path:** o Guacamole serve a UI em `/guacamole`. O operator define `spec.route.path` com esse valor por padrão; o `status.routeURL` já inclui o path.
 
+### GuacamoleConnection
+
+Cria conexões declarativas no banco MySQL da instância Guacamole, conforme o [schema JDBC](https://guacamole.apache.org/doc/gug/jdbc-auth-schema.html) e a [administração de connections](https://guacamole.apache.org/doc/gug/administration.html#connections-and-connection-groups).
+
+```yaml
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: GuacamoleConnection
+metadata:
+  name: windows-jumphost
+  namespace: guacamole
+spec:
+  guacamoleRef:
+    name: guacamole
+  displayName: Windows Jump Host
+  protocol: rdp
+  rdp:
+    hostname: 10.0.0.4
+    port: 3389
+    username: Administrator
+    passwordSecretRef:
+      name: windows-jumphost-credentials
+      key: password
+    security: nla
+    ignoreCert: true
+    width: 1920
+    height: 1080
+    dpi: 96
+  permissions:
+    - entityName: guacadmin
+      entityType: USER
+      permission: READ
+```
+
+Campos principais:
+
+| Campo | Descrição |
+|---|---|
+| `guacamoleRef` | Instância `Guacamole` alvo |
+| `displayName` | Nome exibido na UI (default: `metadata.name`) |
+| `protocol` | `rdp`, `vnc`, `ssh`, `telnet`, `kubernetes` |
+| `parentGroup` | Nome do connection group pai (opcional) |
+| `rdp` / `vnc` / `ssh` | Parâmetros do protocolo → `guacamole_connection_parameter` |
+| `additionalParameters` | Parâmetros extras arbitrários |
+| `permissions` | Permissões `READ`, `UPDATE`, `DELETE`, `ADMINISTER` |
+
+O `status.connectionID` guarda o ID no MySQL para updates idempotentes. Senhas devem usar `passwordSecretRef`.
+
 ---
 
 ## Publicar uma nova versão

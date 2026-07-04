@@ -34,6 +34,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	_ "github.com/go-sql-driver/mysql"
 	guacamolev1alpha1 "github.com/raphaelmorsch/guacamole-operator/api/v1alpha1"
 	"github.com/raphaelmorsch/guacamole-operator/internal/controller"
 	//+kubebuilder:scaffold:imports
@@ -127,6 +128,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Guacamole")
+		os.Exit(1)
+	}
+	if err = (&controller.GuacamoleConnectionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GuacamoleConnection")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

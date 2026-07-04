@@ -1,0 +1,26 @@
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: GuacamoleConnection
+metadata:
+  name: windows-jumphost
+  namespace: guacamole
+spec:
+  guacamoleRef:
+    name: guacamole
+  displayName: Windows Jump Host
+  protocol: rdp
+  rdp:
+    hostname: 10.0.0.4
+    port: 3389
+    username: Administrator
+    passwordSecretRef:
+      name: windows-jumphost-credentials
+      key: password
+    security: nla
+    ignoreCert: true
+    width: 1920
+    height: 1080
+    dpi: 96
+  permissions:
+    - entityName: guacadmin
+      entityType: USER
+      permission: READ

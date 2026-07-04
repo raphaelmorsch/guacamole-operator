@@ -45,6 +45,7 @@ rules:
 - apiGroups:
   - guacamole.guacamole.io
   resources:
+  - guacamoleconnections
   - guacamoles
   verbs:
   - create
@@ -57,12 +58,14 @@ rules:
 - apiGroups:
   - guacamole.guacamole.io
   resources:
+  - guacamoleconnections/finalizers
   - guacamoles/finalizers
   verbs:
   - update
 - apiGroups:
   - guacamole.guacamole.io
   resources:
+  - guacamoleconnections/status
   - guacamoles/status
   verbs:
   - get
