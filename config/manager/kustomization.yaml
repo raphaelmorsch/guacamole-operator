@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: default-route-openshift-image-registry.apps.cluster-x5pjb.dynamic2.redhatworkshops.io/guacamole-operator-system/guacamole-operator
-  newTag: 0.0.4
+  newTag: 0.0.5
