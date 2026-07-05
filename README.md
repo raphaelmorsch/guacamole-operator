@@ -2,12 +2,26 @@
 
 Operator Kubernetes/OpenShift para implantar **Apache Guacamole** de forma declarativa no Red Hat OpenShift. Baseado na implementação de referência [guacamole-rdp](https://github.com/raphaelmorsch/guacamole-rdp).
 
-Para cada recurso customizado `Guacamole`, o operator provisiona automaticamente:
+**Versão estável atual:** `0.0.6`
 
-- **MySQL** com armazenamento persistente
-- **guacd** (proxy RDP/VNC/SSH)
-- **Guacamole web** com inicialização automática do schema do banco
-- **Route OpenShift** para acesso via browser
+## Custom Resources
+
+| CRD | Descrição |
+|---|---|
+| `Guacamole` | Provisiona a stack completa (MySQL, guacd, web, Route, HPA) |
+| `GuacamoleConnection` | Cria conexões RDP/VNC/SSH no banco MySQL da instância |
+
+Para cada recurso `Guacamole`, o operator provisiona automaticamente:
+
+- **MySQL** com armazenamento persistente e init do schema
+- **guacd** (proxy RDP/VNC/SSH) com HPA opcional
+- **Guacamole web** com HPA opcional
+- **Route OpenShift** com path `/guacamole`
+
+Para cada recurso `GuacamoleConnection`, o operator sincroniza:
+
+- Registro em `guacamole_connection` e parâmetros do protocolo
+- Permissões de acesso (`READ`, `UPDATE`, `DELETE`, `ADMINISTER`)
 
 A implantação é **rootless** e respeita as Security Context Constraints (SCC) do OpenShift.
 
@@ -15,12 +29,25 @@ A implantação é **rootless** e respeita as Security Context Constraints (SCC)
 
 ```mermaid
 flowchart LR
-    User[Browser] --> Route[OpenShift Route]
+    User[Browser] --> Route["Route /guacamole"]
     Route --> Guac[Guacamole Web]
     Guac --> Guacd[guacd]
     Guac --> MySQL[(MySQL PVC)]
-    Guacd --> Target[VM Windows/Linux RDP/VNC/SSH]
+    Guacd --> Target[VM RDP/VNC/SSH]
+    ConnCR[GuacamoleConnection CR] --> MySQL
 ```
+
+---
+
+## Histórico de versões
+
+| Versão | Principais mudanças |
+|---|---|
+| **0.0.6** | CRD `GuacamoleConnection` — conexões declarativas no MySQL |
+| **0.0.5** | HPA para guacd + Route com path `/guacamole` |
+| **0.0.4** | HPA para Guacamole web + fix do init do schema MySQL |
+| **0.0.3** | Imagens corretas no CSV (`kube-rbac-proxy` v0.18.2, registry OpenShift) |
+| 0.0.1–0.0.2 | Versões iniciais do operator e catálogo OLM |
 
 ---
 
@@ -42,7 +69,7 @@ flowchart LR
 
 ## Tutorial completo — do zero ao Operator Hub
 
-Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e OpenShift 4.x. A versão estável atual é **0.0.4**.
+Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e OpenShift 4.x.
 
 ### Visão geral das fases
 
@@ -51,7 +78,8 @@ Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e O
 | 1 | Compilar e buildar imagem do operator | Imagem `amd64` local |
 | 2 | Push para registry do OpenShift + bundle/catalog | 3 imagens no cluster |
 | 3 | Registrar catálogo OLM e instalar | CSV `Succeeded` |
-| 4 | Criar instância Guacamole | Stack rodando |
+| 4 | Criar instância `Guacamole` | Stack rodando |
+| 5 | Criar `GuacamoleConnection` | Conexão RDP na UI |
 
 ---
 
@@ -60,7 +88,7 @@ Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e O
 Defina uma vez e reutilize em todos os passos:
 
 ```bash
-export VERSION=0.0.4
+export VERSION=0.0.6
 export NAMESPACE=guacamole-operator-system
 ```
 
@@ -212,7 +240,7 @@ oc apply -f config/olm/catalogsource.yaml
 O arquivo usa a URL **interna** do registry (funciona em qualquer OpenShift):
 
 ```yaml
-image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-operator-catalog:0.0.4
+image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-operator-catalog:0.0.6
 ```
 
 Aguarde o pod do catálogo ficar `Running`:
@@ -293,6 +321,29 @@ oc get guacamole guacamole -n guacamole \
 ```
 
 Credenciais padrão do Guacamole após primeiro acesso: `guacadmin` / `guacadmin` (altere imediatamente).
+
+---
+
+### Fase 6 — Criar uma conexão RDP
+
+Com a instância `Guacamole` em fase `Running`, crie um Secret com a senha e aplique o `GuacamoleConnection`:
+
+```bash
+oc create secret generic windows-jumphost-credentials \
+  -n guacamole --from-literal=password='SuaSenha'
+
+oc apply -f config/samples/guacamole_v1alpha1_guacamoleconnection.yaml
+```
+
+Acompanhar:
+
+```bash
+oc get guacamoleconnection -n guacamole
+oc get guacamoleconnection windows-jumphost -n guacamole \
+  -o jsonpath='phase={.status.phase} connectionID={.status.connectionID}{"\n"}'
+```
+
+Esperado: `phase=Ready` e `connectionID` preenchido. A conexão aparece em **Settings → Connections** na UI do Guacamole.
 
 ---
 
@@ -383,10 +434,11 @@ O `status.connectionID` guarda o ID no MySQL para updates idempotentes. Senhas d
 
 ## Publicar uma nova versão
 
-Para publicar uma correção (ex.: `0.0.5`):
+Para publicar uma correção (ex.: `0.0.7`), partindo da versão anterior no catálogo:
 
 ```bash
-export VERSION=0.0.5
+export VERSION=0.0.7
+export PREVIOUS_VERSION=0.0.6
 
 # 1. Rebuild e push (mesmo fluxo da Fase 1 + 2)
 podman build --platform linux/amd64 -t guacamole.io/guacamole-operator:${VERSION} .
@@ -399,17 +451,20 @@ make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha \
 make bundle-build BUNDLE_IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION} CONTAINER_TOOL=podman
 podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
 
-bin/opm index add --pull-tool podman --mode semver --generate -d index.Dockerfile \
+# 2. Catalog incremental (preserva histórico semver para upgrade automático)
+bin/opm index add --pull-tool podman --mode semver \
+  --from-index ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${PREVIOUS_VERSION} \
+  --generate -d index.Dockerfile \
   --bundles ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
 podman build --platform linux/amd64 -f index.Dockerfile \
   -t ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION} .
 podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION}
 
-# 2. Atualizar tag em config/olm/catalogsource.yaml e aplicar
+# 3. Atualizar tag em config/olm/catalogsource.yaml e aplicar
 oc apply -f config/olm/catalogsource.yaml
 oc delete pod -n openshift-marketplace -l olm.catalogSource=guacamole-operator-catalog
 
-# 3. Aguardar upgrade automático ou recriar subscription se ficar presa (ver Troubleshooting)
+# 4. Aguardar upgrade automático ou recriar subscription se ficar presa (ver Troubleshooting)
 oc get csv -n ${NAMESPACE}
 ```
 
@@ -518,6 +573,24 @@ oc get packagemanifest guacamole-operator -n openshift-marketplace \
 
 ---
 
+### GuacamoleConnection em estado `Failed`
+
+**Causas comuns:**
+
+- Instância `Guacamole` pai ainda não está em fase `Running`
+- Schema MySQL não inicializado (ver seção acima)
+- `spec.rdp.hostname` ausente ou Secret referenciado inexistente
+- Usuário em `permissions.entityName` não existe no Guacamole (ex.: `guacadmin` só existe após o primeiro login no schema)
+
+**Verificação:**
+
+```bash
+oc describe guacamoleconnection <nome> -n <namespace>
+oc get guacamole <instancia> -n <namespace> -o jsonpath='{.status.phase}{"\n"}'
+```
+
+---
+
 ### Thumbnail ausente no Operator Hub
 
 O ícone vem do campo `spec.icon` no CSV (`config/manifests/guacamole-icon.png`). Após alterar, regenere bundle + catalog, faça push e reinicie o pod do catálogo (ver seção **Ícone no Software Catalog**).
@@ -551,6 +624,9 @@ make deploy IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
 
 oc new-project guacamole
 oc apply -f config/samples/guacamole_v1alpha1_guacamole.yaml
+oc create secret generic windows-jumphost-credentials \
+  -n guacamole --from-literal=password='SuaSenha'
+oc apply -f config/samples/guacamole_v1alpha1_guacamoleconnection.yaml
 ```
 
 ---
@@ -576,7 +652,8 @@ make run
 ## Desinstalação
 
 ```bash
-# Remover instâncias Guacamole (em todos os namespaces onde foram criadas)
+# Remover conexões e instâncias (em todos os namespaces onde foram criadas)
+oc delete guacamoleconnection --all -A
 oc delete guacamole --all -A
 
 # Remover operator via OLM
@@ -595,11 +672,15 @@ O thumbnail do Operator Hub vem do campo `spec.icon` no CSV. O ícone fonte fica
 Após alterar o ícone, regenere o bundle e a catalog image, faça push e reinicie o pod do catálogo:
 
 ```bash
+export PREVIOUS_VERSION=0.0.6   # versão anterior no catálogo
+
 make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
 make bundle-build BUNDLE_IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION} CONTAINER_TOOL=podman
 podman push ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
 
-bin/opm index add --pull-tool podman --mode semver --generate -d index.Dockerfile \
+bin/opm index add --pull-tool podman --mode semver \
+  --from-index ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${PREVIOUS_VERSION} \
+  --generate -d index.Dockerfile \
   --bundles ${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION}
 podman build --platform linux/amd64 -f index.Dockerfile \
   -t ${REGISTRY}/${NAMESPACE}/guacamole-operator-catalog:${VERSION} .
@@ -614,6 +695,8 @@ oc delete pod -n openshift-marketplace -l olm.catalogSource=guacamole-operator-c
 
 - [guacamole-rdp](https://github.com/raphaelmorsch/guacamole-rdp) — implementação YAML de referência
 - [Apache Guacamole](https://guacamole.apache.org/)
+- [Guacamole — Connections and connection groups](https://guacamole.apache.org/doc/gug/administration.html#connections-and-connection-groups)
+- [Guacamole — JDBC auth schema](https://guacamole.apache.org/doc/gug/jdbc-auth-schema.html)
 - [Operator SDK](https://sdk.operatorframework.io/)
 - [OpenShift OLM](https://docs.openshift.com/container-platform/latest/operators/understanding/olm/olm-understanding-olm.html)
 
