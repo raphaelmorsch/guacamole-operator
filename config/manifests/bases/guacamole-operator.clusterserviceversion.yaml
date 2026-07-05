@@ -93,15 +93,16 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
+    - description: GuacamoleConnection defines a connection in a Guacamole instance
+        database.
+      displayName: Guacamole Connection
+      kind: GuacamoleConnection
+      name: guacamoleconnections.guacamole.guacamole.io
+      version: v1alpha1
     - description: Guacamole is the Schema for the guacamoles API.
       displayName: Guacamole
       kind: Guacamole
       name: guacamoles.guacamole.guacamole.io
-      version: v1alpha1
-    - description: GuacamoleConnection defines a connection in a Guacamole instance database.
-      displayName: Guacamole Connection
-      kind: GuacamoleConnection
-      name: guacamoleconnections.guacamole.guacamole.io
       version: v1alpha1
   description: |
     ## Guacamole Operator for OpenShift
