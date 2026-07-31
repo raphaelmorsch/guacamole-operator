@@ -75,7 +75,8 @@ type DesktopPoolReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktoppools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoleconnections,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=services;endpoints;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;endpoints;secrets;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;virtualmachineinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes;datasources,verbs=get;list;watch;create;update;patch;delete
 
@@ -110,6 +111,23 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 		return ctrl.Result{}, err
 	}
+
+	if err := r.ensureCloneRBAC(ctx, pool); err != nil {
+		logger.Error(err, "failed to ensure CDI clone RBAC in golden-image namespace",
+			"dataSourceNamespace", dataSourceNamespace(pool))
+		_ = r.patchStatus(ctx, pool, func(status *guacamolev1alpha1.DesktopPoolStatus) {
+			status.Phase = guacamolev1alpha1.DesktopPoolPhaseFailed
+			status.DataSourceNamespace = dataSourceNamespace(pool)
+			setDesktopPoolCondition(status, "CloneAuthorized", metav1.ConditionFalse, "CloneRBACFailed", err.Error())
+			setDesktopPoolCondition(status, "Ready", metav1.ConditionFalse, "CloneRBACFailed", err.Error())
+		})
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	_ = r.patchStatus(ctx, pool, func(status *guacamolev1alpha1.DesktopPoolStatus) {
+		status.DataSourceNamespace = dataSourceNamespace(pool)
+		setDesktopPoolCondition(status, "CloneAuthorized", metav1.ConditionTrue, "CloneRBACReady",
+			fmt.Sprintf("clone RBAC ready in namespace %s", dataSourceNamespace(pool)))
+	})
 
 	vms, err := r.listPoolVMs(ctx, pool)
 	if err != nil {
@@ -155,14 +173,32 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	var credentialsSecretName string
 	if poolCreatesConnections(pool) {
+		credRef, err := r.ensureCredentialsSecret(ctx, pool)
+		if err != nil {
+			logger.Error(err, "failed to ensure Windows RDP credentials secret")
+			_ = r.patchStatus(ctx, pool, func(status *guacamolev1alpha1.DesktopPoolStatus) {
+				status.Phase = guacamolev1alpha1.DesktopPoolPhaseFailed
+				setDesktopPoolCondition(status, "CredentialsReady", metav1.ConditionFalse, "CredentialsFailed", err.Error())
+				setDesktopPoolCondition(status, "Ready", metav1.ConditionFalse, "CredentialsFailed", err.Error())
+			})
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		}
+		credentialsSecretName = credRef.Name
+		_ = r.patchStatus(ctx, pool, func(status *guacamolev1alpha1.DesktopPoolStatus) {
+			status.CredentialsSecret = credentialsSecretName
+			setDesktopPoolCondition(status, "CredentialsReady", metav1.ConditionTrue, "CredentialsReady",
+				fmt.Sprintf("using secret %s/%s key=%s", pool.Namespace, credRef.Name, credRef.Key))
+		})
+
 		for i := range members {
 			if members[i].State != guacamolev1alpha1.DesktopStateAvailable &&
 				members[i].State != guacamolev1alpha1.DesktopStateAllocated &&
 				members[i].State != guacamolev1alpha1.DesktopStateInUse {
 				continue
 			}
-			connName, err := r.ensureGuacamoleConnection(ctx, pool, members[i])
+			connName, err := r.ensureGuacamoleConnection(ctx, pool, members[i], credRef)
 			if err != nil {
 				logger.Error(err, "failed to ensure GuacamoleConnection", "vm", members[i].Name)
 				members[i].Message = err.Error()
@@ -195,12 +231,18 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		status.Available = statusCounts.available
 		status.Allocated = statusCounts.allocated
 		status.Failed = statusCounts.failed
+		status.DataSourceNamespace = dataSourceNamespace(pool)
+		if credentialsSecretName != "" {
+			status.CredentialsSecret = credentialsSecretName
+		}
 		status.Desktops = members
 		ready := phase == guacamolev1alpha1.DesktopPoolPhaseReady
 		condStatus := metav1.ConditionFalse
 		if ready {
 			condStatus = metav1.ConditionTrue
 		}
+		setDesktopPoolCondition(status, "CloneAuthorized", metav1.ConditionTrue, "CloneRBACReady",
+			fmt.Sprintf("clone RBAC ready in namespace %s", dataSourceNamespace(pool)))
 		setDesktopPoolCondition(status, "Ready", condStatus, reason, message)
 	}); err != nil {
 		return ctrl.Result{}, err
@@ -414,6 +456,7 @@ func buildDesktopVirtualMachine(pool *guacamolev1alpha1.DesktopPool, vmName, dis
 			},
 			"spec": map[string]interface{}{
 				"domain": domain,
+				"serviceAccountName": desktopPoolCloneServiceAccount,
 				"networks": []interface{}{
 					map[string]interface{}{
 						"name": "default",
@@ -490,10 +533,75 @@ func (r *DesktopPoolReconciler) ensureRDPService(ctx context.Context, pool *guac
 	return err
 }
 
+func (r *DesktopPoolReconciler) ensureCredentialsSecret(
+	ctx context.Context,
+	pool *guacamolev1alpha1.DesktopPool,
+) (*guacamolev1alpha1.SecretKeyRef, error) {
+	guac := pool.Spec.Guacamole
+
+	// Prefer an existing secret reference when provided.
+	if guac.PasswordSecretRef != nil && guac.PasswordSecretRef.Name != "" {
+		key := guac.PasswordSecretRef.Key
+		if key == "" {
+			key = "password"
+		}
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: guac.PasswordSecretRef.Name, Namespace: pool.Namespace}, secret); err != nil {
+			return nil, fmt.Errorf("passwordSecretRef %q: %w", guac.PasswordSecretRef.Name, err)
+		}
+		if _, ok := secret.Data[key]; !ok {
+			return nil, fmt.Errorf("passwordSecretRef %q missing key %q", guac.PasswordSecretRef.Name, key)
+		}
+		return &guacamolev1alpha1.SecretKeyRef{Name: guac.PasswordSecretRef.Name, Key: key}, nil
+	}
+
+	if guac.Password == "" {
+		return nil, fmt.Errorf("spec.guacamole.password or spec.guacamole.passwordSecretRef is required when createConnections is enabled")
+	}
+
+	secretName := guac.CredentialsSecretName
+	if secretName == "" {
+		secretName = fmt.Sprintf("%s-rdp-credentials", pool.Name)
+	}
+	username := guac.Username
+	if username == "" {
+		username = "Administrator"
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: pool.Namespace,
+		},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if err := controllerutil.SetControllerReference(pool, secret, r.Scheme); err != nil {
+			return err
+		}
+		if secret.Labels == nil {
+			secret.Labels = map[string]string{}
+		}
+		secret.Labels[guacamolev1alpha1.DesktopLabelPool] = pool.Name
+		secret.Labels[guacamolev1alpha1.DesktopLabelManagedBy] = guacamolev1alpha1.DesktopManagedByValue
+		secret.Type = corev1.SecretTypeOpaque
+		if secret.StringData == nil {
+			secret.StringData = map[string]string{}
+		}
+		secret.StringData["username"] = username
+		secret.StringData["password"] = guac.Password
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &guacamolev1alpha1.SecretKeyRef{Name: secretName, Key: "password"}, nil
+}
+
 func (r *DesktopPoolReconciler) ensureGuacamoleConnection(
 	ctx context.Context,
 	pool *guacamolev1alpha1.DesktopPool,
 	member guacamolev1alpha1.DesktopMemberStatus,
+	credRef *guacamolev1alpha1.SecretKeyRef,
 ) (string, error) {
 	connName := member.Name
 	conn := &guacamolev1alpha1.GuacamoleConnection{
@@ -534,14 +642,12 @@ func (r *DesktopPoolReconciler) ensureGuacamoleConnection(
 		conn.Spec.Protocol = "rdp"
 		conn.Spec.ParentGroup = pool.Spec.Guacamole.ParentGroup
 		conn.Spec.RDP = &guacamolev1alpha1.RDPConnectionSpec{
-			Hostname:   host,
-			Port:       &port,
-			Username:   username,
-			Security:   security,
-			IgnoreCert: &ignoreCert,
-		}
-		if pool.Spec.Guacamole.PasswordSecretRef != nil {
-			conn.Spec.RDP.PasswordSecretRef = pool.Spec.Guacamole.PasswordSecretRef
+			Hostname:          host,
+			Port:              &port,
+			Username:          username,
+			Security:          security,
+			IgnoreCert:        &ignoreCert,
+			PasswordSecretRef: credRef,
 		}
 		return nil
 	})
@@ -683,6 +789,10 @@ func (r *DesktopPoolReconciler) finalizePool(ctx context.Context, pool *guacamol
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
+	if err := r.cleanupCloneRBAC(ctx, pool); err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+
 	controllerutil.RemoveFinalizer(pool, desktopPoolFinalizer)
 	if err := r.Update(ctx, pool); err != nil {
 		return ctrl.Result{}, err
@@ -742,6 +852,7 @@ func (r *DesktopPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&guacamolev1alpha1.DesktopPool{}).
 		Owns(vm).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.Secret{}).
 		Owns(&guacamolev1alpha1.GuacamoleConnection{}).
 		Complete(r)
 }
@@ -755,6 +866,13 @@ func validateDesktopPoolSpec(pool *guacamolev1alpha1.DesktopPool) error {
 	}
 	if pool.Spec.Guacamole.InstanceRef.Name == "" {
 		return fmt.Errorf("spec.guacamole.instanceRef.name is required")
+	}
+	if poolCreatesConnections(pool) {
+		hasInline := pool.Spec.Guacamole.Password != ""
+		hasRef := pool.Spec.Guacamole.PasswordSecretRef != nil && pool.Spec.Guacamole.PasswordSecretRef.Name != ""
+		if !hasInline && !hasRef {
+			return fmt.Errorf("spec.guacamole.password or spec.guacamole.passwordSecretRef is required when createConnections is enabled")
+		}
 	}
 	if pool.Spec.VirtualMachine.DiskSize != "" {
 		if _, err := resource.ParseQuantity(pool.Spec.VirtualMachine.DiskSize); err != nil {

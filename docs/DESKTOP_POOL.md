@@ -56,12 +56,40 @@ spec:
       name: guacamole
       namespace: guacamole
     username: Administrator
-    passwordSecretRef:
-      name: windows-desktop-credentials
-      key: password
+    # Lab: operator creates Secret <pool>-rdp-credentials
+    password: "ChangeMe!"
+    # Production alternative (existing Secret; operator does not create one):
+    # passwordSecretRef:
+    #   name: windows-desktop-credentials
+    #   key: password
   recyclePolicy: Delete
   createConnections: true
 ```
+
+### Credentials
+
+| Campo | Comportamento |
+|---|---|
+| `guacamole.password` | Cria/atualiza Secret `{pool}-rdp-credentials` (ou `credentialsSecretName`) com `username`/`password` |
+| `guacamole.passwordSecretRef` | Usa Secret existente; não cria Secret |
+| Precedência | `passwordSecretRef` ganha se ambos forem setados |
+
+`status.credentialsSecret` e condition `CredentialsReady` reportam o Secret em uso.
+
+## CDI clone RBAC
+
+When `spec.source.dataSource.namespace` differs from the DesktopPool namespace, the
+controller automatically creates:
+
+| Resource | Where | Purpose |
+|---|---|---|
+| ServiceAccount `guacamole-desktop-pool` | pool namespace | Used by desktop VMs |
+| Role `guacamole-desktop-cloner` | golden-image namespace | `get` PVC + `create` pods + read DataSource/DV |
+| RoleBinding `guacamole-desktop-cloner-<pool-ns>` | golden-image namespace | Binds the pool SA (and `default`) |
+
+Status condition `CloneAuthorized=True` means clone RBAC is ready.
+On DesktopPool delete, the RoleBinding is removed when no other pool in that
+namespace still needs the golden image.
 
 ## Labels
 

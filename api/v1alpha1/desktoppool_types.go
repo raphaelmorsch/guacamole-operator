@@ -150,12 +150,27 @@ type DesktopPoolGuacamoleSpec struct {
 	InstanceRef GuacamoleInstanceRef `json:"instanceRef"`
 
 	// Username used for RDP authentication on pooled desktops.
+	// Stored in the managed credentials Secret when password is set.
 	// +kubebuilder:default="Administrator"
 	Username string `json:"username,omitempty"`
 
-	// PasswordSecretRef references the RDP password secret.
+	// Password is the Windows RDP password.
+	// When set, the operator creates/updates a Secret in the DesktopPool namespace
+	// (see credentialsSecretName) and wires GuacamoleConnections to it.
+	// Prefer passwordSecretRef in production; plaintext is convenient for labs.
+	// Ignored when passwordSecretRef is set.
+	// +optional
+	Password string `json:"password,omitempty"`
+
+	// PasswordSecretRef references an existing Secret with the RDP password.
+	// When set, the operator does not create a credentials Secret.
 	// +optional
 	PasswordSecretRef *SecretKeyRef `json:"passwordSecretRef,omitempty"`
+
+	// CredentialsSecretName is the name of the Secret managed from password.
+	// Defaults to "<desktoppool-name>-rdp-credentials".
+	// +optional
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
 
 	// ParentGroup places generated GuacamoleConnections inside a connection group.
 	// +optional
@@ -223,11 +238,22 @@ type DesktopPoolStatus struct {
 	// Failed is the number of desktops in Failed state.
 	Failed int32 `json:"failed,omitempty"`
 
+	// DataSourceNamespace is the golden-image namespace where CDI clone RBAC is provisioned.
+	// Resolved from spec.source.dataSource.namespace (defaults to the pool namespace).
+	// +optional
+	DataSourceNamespace string `json:"dataSourceNamespace,omitempty"`
+
+	// CredentialsSecret is the Secret used for Windows RDP passwords on GuacamoleConnections.
+	// Either the managed secret created from spec.guacamole.password, or the referenced passwordSecretRef.
+	// +optional
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+
 	// Desktops lists members currently managed by the pool.
 	// +optional
 	Desktops []DesktopMemberStatus `json:"desktops,omitempty"`
 
 	// Conditions represent the latest available observations of the pool state.
+	// Includes Ready and CloneAuthorized.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

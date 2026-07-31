@@ -23,9 +23,13 @@ spec:
       name: guacamole
       namespace: guacamole
     username: Administrator
-    passwordSecretRef:
-      name: windows-desktop-credentials
-      key: password
+    # Option A (lab): operator creates Secret <pool>-rdp-credentials
+    password: "ChangeMe!"
+    # credentialsSecretName: windows-desktop-rdp-credentials  # optional override
+    # Option B (production): reference an existing Secret instead of password
+    # passwordSecretRef:
+    #   name: windows-desktop-credentials
+    #   key: password
     security: nla
     ignoreCert: true
   recyclePolicy: Delete
