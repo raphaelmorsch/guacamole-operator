@@ -3,7 +3,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.15
+VERSION ?= 0.0.16
 
 # Internal OpenShift registry URL for images pulled by workloads in other namespaces.
 OPENSHIFT_INTERNAL_REGISTRY ?= image-registry.openshift-image-registry.svc:5000
@@ -11,6 +11,10 @@ OPENSHIFT_INTERNAL_REGISTRY ?= image-registry.openshift-image-registry.svc:5000
 # Image URL for the Guacamole metrics exporter sidecar deployment.
 # Uses the internal registry so Guacamole instances in any namespace can pull it.
 METRICS_EXPORTER_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator-system/guacamole-metrics-exporter:$(VERSION)
+
+# DesktopPortal related images (Console dynamic plugin + API).
+DESKTOP_PORTAL_PLUGIN_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator/guacamole-desktop-portal-plugin:$(VERSION)
+DESKTOP_PORTAL_API_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator/guacamole-desktop-portal-api:$(VERSION)
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -164,6 +168,22 @@ docker-build-metrics-exporter: ## Build docker image with the Guacamole metrics 
 docker-push-metrics-exporter: ## Push docker image with the Guacamole metrics exporter.
 	$(CONTAINER_TOOL) push ${METRICS_EXPORTER_IMG}
 
+.PHONY: docker-build-portal-api
+docker-build-portal-api: ## Build desktop portal API image.
+	$(CONTAINER_TOOL) build -f Dockerfile.portal-api -t ${DESKTOP_PORTAL_API_IMG} .
+
+.PHONY: docker-push-portal-api
+docker-push-portal-api: ## Push desktop portal API image.
+	$(CONTAINER_TOOL) push ${DESKTOP_PORTAL_API_IMG}
+
+.PHONY: docker-build-portal-plugin
+docker-build-portal-plugin: ## Build OpenShift Console desktop portal plugin image.
+	$(CONTAINER_TOOL) build -f console-plugin/Dockerfile -t ${DESKTOP_PORTAL_PLUGIN_IMG} console-plugin/
+
+.PHONY: docker-push-portal-plugin
+docker-push-portal-plugin: ## Push OpenShift Console desktop portal plugin image.
+	$(CONTAINER_TOOL) push ${DESKTOP_PORTAL_PLUGIN_IMG}
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
@@ -286,7 +306,10 @@ bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metada
 	$(OPERATOR_SDK) generate kustomize manifests -q
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	cp config/default/manager_auth_proxy_patch.yaml config/default/manager_auth_proxy_patch.yaml.bundlebak
-	sed 's|__METRICS_EXPORTER_IMAGE__|$(METRICS_EXPORTER_IMG)|g' config/default/manager_auth_proxy_patch.yaml.bundlebak > config/default/manager_auth_proxy_patch.yaml
+	sed -e 's|__METRICS_EXPORTER_IMAGE__|$(METRICS_EXPORTER_IMG)|g' \
+	    -e 's|__DESKTOP_PORTAL_PLUGIN_IMAGE__|$(DESKTOP_PORTAL_PLUGIN_IMG)|g' \
+	    -e 's|__DESKTOP_PORTAL_API_IMAGE__|$(DESKTOP_PORTAL_API_IMG)|g' \
+	    config/default/manager_auth_proxy_patch.yaml.bundlebak > config/default/manager_auth_proxy_patch.yaml
 	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
 	mv config/default/manager_auth_proxy_patch.yaml.bundlebak config/default/manager_auth_proxy_patch.yaml
 	$(OPERATOR_SDK) bundle validate ./bundle

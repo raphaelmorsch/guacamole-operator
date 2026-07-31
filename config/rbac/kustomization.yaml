@@ -28,3 +28,5 @@ resources:
 - desktoppool_viewer_role.yaml
 - desktopsession_editor_role.yaml
 - desktopsession_viewer_role.yaml
+- desktopportal_editor_role.yaml
+- desktopportal_viewer_role.yaml

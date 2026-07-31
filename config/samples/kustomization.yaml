@@ -4,4 +4,5 @@ resources:
 - guacamole_v1alpha1_guacamoleconnection.yaml
 - guacamole_v1alpha1_desktoppool.yaml
 - guacamole_v1alpha1_desktopsession.yaml
+- guacamole_v1alpha1_desktopportal.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

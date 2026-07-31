@@ -85,7 +85,7 @@ metadata:
       ]
     capabilities: Full Lifecycle
     categories: Networking
-    containerImage: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator:0.0.15
+    containerImage: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator:0.0.16
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"

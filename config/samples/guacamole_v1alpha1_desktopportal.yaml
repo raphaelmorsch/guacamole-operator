@@ -1,0 +1,36 @@
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: DesktopPortal
+metadata:
+  name: desktop-portal
+  namespace: guacamole-desktops
+spec:
+  displayName: Desktop Sessions
+  # Images default from RELATED_IMAGE_* on the operator Deployment when omitted.
+  # pluginImage: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-desktop-portal-plugin:0.0.15
+  # apiImage: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-desktop-portal-api:0.0.15
+  defaultPool:
+    name: windows-desktop
+    namespace: guacamole-desktops
+  sessionNamespace: guacamole-desktops
+  enablePlugin: true
+  navSection: home
+  keycloak:
+    url: https://keycloak.apps.example.com
+    realm: guacamole
+    clientID: guacamole-desktop-portal
+    clientSecretRef:
+      name: keycloak-portal-client
+      key: client-secret
+    insecureSkipVerify: false
+---
+# Example secret for the Keycloak confidential client (client_credentials).
+# The client service account needs realm-management roles to query users
+# (e.g. view-users / query-users).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-portal-client
+  namespace: guacamole-desktops
+type: Opaque
+stringData:
+  client-secret: change-me

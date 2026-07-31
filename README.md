@@ -12,6 +12,7 @@ Operator Kubernetes/OpenShift para implantar **Apache Guacamole** de forma decla
 | `GuacamoleConnection` | Cria conexões RDP/VNC/SSH no banco MySQL da instância |
 | `DesktopPool` | Pool de VMs Windows clonadas de um DataSource golden (OpenShift Virtualization) |
 | `DesktopSession` | Reserva exclusiva de um desktop do pool + `GuacamoleConnection` sob demanda |
+| `DesktopPortal` | Dynamic Plugin no OpenShift Console para alocar DesktopSessions a usuários Keycloak |
 
 Para cada recurso `Guacamole`, o operator provisiona automaticamente:
 
