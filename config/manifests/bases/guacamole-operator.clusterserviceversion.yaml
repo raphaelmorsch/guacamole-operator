@@ -85,7 +85,7 @@ metadata:
       ]
     capabilities: Full Lifecycle
     categories: Networking
-    containerImage: default-route-openshift-image-registry.apps.cluster-x5pjb.dynamic2.redhatworkshops.io/guacamole-operator-system/guacamole-operator:0.0.12
+    containerImage: default-route-openshift-image-registry.apps.cluster-nvf2r.dyn.redhatworkshops.io/guacamole-operator/guacamole-operator:0.0.12
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"
@@ -99,8 +99,23 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: GuacamoleConnection defines a connection in a Guacamole instance
-        database.
+    - description: |-
+        DesktopPool manages a pool of Windows desktop VMs cloned from a golden DataSource
+        and exposed to Guacamole over RDP.
+      displayName: Desktop Pool
+      kind: DesktopPool
+      name: desktoppools.guacamole.guacamole.io
+      version: v1alpha1
+    - description: |-
+        DesktopSession represents a request for an exclusive desktop from a DesktopPool.
+        Allocation and GuacamoleConnection creation are handled by the DesktopSession controller
+        (post-MVP). Until then, DesktopPool can create provisional connections per Available VM.
+      displayName: Desktop Session
+      kind: DesktopSession
+      name: desktopsessions.guacamole.guacamole.io
+      version: v1alpha1
+    - description: GuacamoleConnection is the Schema for the guacamoleconnections
+        API.
       displayName: Guacamole Connection
       kind: GuacamoleConnection
       name: guacamoleconnections.guacamole.guacamole.io

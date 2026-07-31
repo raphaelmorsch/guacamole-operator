@@ -1,7 +1,7 @@
 apiVersion: guacamole.guacamole.io/v1alpha1
 kind: DesktopSession
 metadata:
-  generateName: desktop-session-
+  name: desktop-session-example
   namespace: guacamole-desktops
 spec:
   poolRef:

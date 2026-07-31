@@ -6,6 +6,63 @@ metadata:
       [
         {
           "apiVersion": "guacamole.guacamole.io/v1alpha1",
+          "kind": "DesktopPool",
+          "metadata": {
+            "name": "windows-desktop",
+            "namespace": "guacamole-desktops"
+          },
+          "spec": {
+            "createConnections": true,
+            "guacamole": {
+              "ignoreCert": true,
+              "instanceRef": {
+                "name": "guacamole",
+                "namespace": "guacamole"
+              },
+              "passwordSecretRef": {
+                "key": "password",
+                "name": "windows-desktop-credentials"
+              },
+              "security": "nla",
+              "username": "Administrator"
+            },
+            "network": {
+              "rdpPort": 3389
+            },
+            "recyclePolicy": "Delete",
+            "replicas": 2,
+            "source": {
+              "dataSource": {
+                "name": "win2k19-guacamole-desktop",
+                "namespace": "win2k19-golden"
+              }
+            },
+            "virtualMachine": {
+              "cpu": 2,
+              "diskSize": "40Gi",
+              "memory": "4Gi",
+              "storageClassName": "ocs-external-storagecluster-ceph-rbd-immediate"
+            }
+          }
+        },
+        {
+          "apiVersion": "guacamole.guacamole.io/v1alpha1",
+          "kind": "DesktopSession",
+          "metadata": {
+            "name": "desktop-session-example",
+            "namespace": "guacamole-desktops"
+          },
+          "spec": {
+            "poolRef": {
+              "name": "windows-desktop"
+            },
+            "requester": {
+              "subject": "usuario1"
+            }
+          }
+        },
+        {
+          "apiVersion": "guacamole.guacamole.io/v1alpha1",
           "kind": "Guacamole",
           "metadata": {
             "name": "guacamole",
@@ -89,7 +146,7 @@ metadata:
     capabilities: Full Lifecycle
     categories: Networking
     containerImage: default-route-openshift-image-registry.apps.cluster-x5pjb.dynamic2.redhatworkshops.io/guacamole-operator-system/guacamole-operator:0.0.12
-    createdAt: "2026-07-15T16:43:19Z"
+    createdAt: "2026-07-31T12:48:25Z"
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"
@@ -97,14 +154,29 @@ metadata:
     operators.operatorframework.io/builder: operator-sdk-v1.37.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
     repository: https://github.com/raphaelmorsch/guacamole-operator
-  name: guacamole-operator.v0.0.6
+  name: guacamole-operator.v0.0.12
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: GuacamoleConnection defines a connection in a Guacamole instance
-        database.
+    - description: |-
+        DesktopPool manages a pool of Windows desktop VMs cloned from a golden DataSource
+        and exposed to Guacamole over RDP.
+      displayName: Desktop Pool
+      kind: DesktopPool
+      name: desktoppools.guacamole.guacamole.io
+      version: v1alpha1
+    - description: |-
+        DesktopSession represents a request for an exclusive desktop from a DesktopPool.
+        Allocation and GuacamoleConnection creation are handled by the DesktopSession controller
+        (post-MVP). Until then, DesktopPool can create provisional connections per Available VM.
+      displayName: Desktop Session
+      kind: DesktopSession
+      name: desktopsessions.guacamole.guacamole.io
+      version: v1alpha1
+    - description: GuacamoleConnection is the Schema for the guacamoleconnections
+        API.
       displayName: Guacamole Connection
       kind: GuacamoleConnection
       name: guacamoleconnections.guacamole.guacamole.io
@@ -149,6 +221,7 @@ spec:
         - apiGroups:
           - ""
           resources:
+          - endpoints
           - persistentvolumeclaims
           - secrets
           - services
@@ -186,8 +259,23 @@ spec:
           - update
           - watch
         - apiGroups:
+          - cdi.kubevirt.io
+          resources:
+          - datasources
+          - datavolumes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - guacamole.guacamole.io
           resources:
+          - desktoppools
+          - desktopsessions
           - guacamoleconnections
           - guacamoles
           verbs:
@@ -201,6 +289,8 @@ spec:
         - apiGroups:
           - guacamole.guacamole.io
           resources:
+          - desktoppools/finalizers
+          - desktopsessions/finalizers
           - guacamoleconnections/finalizers
           - guacamoles/finalizers
           verbs:
@@ -208,12 +298,27 @@ spec:
         - apiGroups:
           - guacamole.guacamole.io
           resources:
+          - desktoppools/status
+          - desktopsessions/status
           - guacamoleconnections/status
           - guacamoles/status
           verbs:
           - get
           - patch
           - update
+        - apiGroups:
+          - kubevirt.io
+          resources:
+          - virtualmachineinstances
+          - virtualmachines
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
         - apiGroups:
           - route.openshift.io
           resources:
@@ -290,12 +395,12 @@ spec:
                 - /manager
                 env:
                 - name: RELATED_IMAGE_GUACAMOLE_METRICS_EXPORTER
-                  value: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-metrics-exporter:0.0.6
+                  value: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-metrics-exporter:0.0.12
                 - name: POD_NAMESPACE
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
-                image: default-route-openshift-image-registry.apps.cluster-z5jsv.dynamic2.redhatworkshops.io/guacamole-operator/guacamole-operator:0.0.6
+                image: default-route-openshift-image-registry.apps.cluster-nvf2r.dyn.redhatworkshops.io/guacamole-operator/guacamole-operator:0.0.12
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -389,6 +494,6 @@ spec:
     name: Raphael Morsch
     url: https://github.com/raphaelmorsch
   relatedImages:
-  - image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-metrics-exporter:0.0.6
+  - image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-metrics-exporter:0.0.12
     name: guacamole-metrics-exporter
-  version: 0.0.6
+  version: 0.0.12
