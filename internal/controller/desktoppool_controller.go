@@ -75,10 +75,12 @@ type DesktopPoolReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktoppools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoleconnections,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=services;endpoints;secrets;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;endpoints;secrets;serviceaccounts;pods;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;virtualmachineinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes;datasources,verbs=get;list;watch;create;update;patch;delete
+// Pods create is required so the operator can grant CDI cross-namespace clone RBAC
+// (Kubernetes forbids escalating privileges the SA does not already hold).
 
 func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -193,9 +195,7 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 
 		for i := range members {
-			if members[i].State != guacamolev1alpha1.DesktopStateAvailable &&
-				members[i].State != guacamolev1alpha1.DesktopStateAllocated &&
-				members[i].State != guacamolev1alpha1.DesktopStateInUse {
+			if members[i].State != guacamolev1alpha1.DesktopStateAvailable {
 				continue
 			}
 			connName, err := r.ensureGuacamoleConnection(ctx, pool, members[i], credRef)
@@ -537,64 +537,7 @@ func (r *DesktopPoolReconciler) ensureCredentialsSecret(
 	ctx context.Context,
 	pool *guacamolev1alpha1.DesktopPool,
 ) (*guacamolev1alpha1.SecretKeyRef, error) {
-	guac := pool.Spec.Guacamole
-
-	// Prefer an existing secret reference when provided.
-	if guac.PasswordSecretRef != nil && guac.PasswordSecretRef.Name != "" {
-		key := guac.PasswordSecretRef.Key
-		if key == "" {
-			key = "password"
-		}
-		secret := &corev1.Secret{}
-		if err := r.Get(ctx, types.NamespacedName{Name: guac.PasswordSecretRef.Name, Namespace: pool.Namespace}, secret); err != nil {
-			return nil, fmt.Errorf("passwordSecretRef %q: %w", guac.PasswordSecretRef.Name, err)
-		}
-		if _, ok := secret.Data[key]; !ok {
-			return nil, fmt.Errorf("passwordSecretRef %q missing key %q", guac.PasswordSecretRef.Name, key)
-		}
-		return &guacamolev1alpha1.SecretKeyRef{Name: guac.PasswordSecretRef.Name, Key: key}, nil
-	}
-
-	if guac.Password == "" {
-		return nil, fmt.Errorf("spec.guacamole.password or spec.guacamole.passwordSecretRef is required when createConnections is enabled")
-	}
-
-	secretName := guac.CredentialsSecretName
-	if secretName == "" {
-		secretName = fmt.Sprintf("%s-rdp-credentials", pool.Name)
-	}
-	username := guac.Username
-	if username == "" {
-		username = "Administrator"
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: pool.Namespace,
-		},
-	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		if err := controllerutil.SetControllerReference(pool, secret, r.Scheme); err != nil {
-			return err
-		}
-		if secret.Labels == nil {
-			secret.Labels = map[string]string{}
-		}
-		secret.Labels[guacamolev1alpha1.DesktopLabelPool] = pool.Name
-		secret.Labels[guacamolev1alpha1.DesktopLabelManagedBy] = guacamolev1alpha1.DesktopManagedByValue
-		secret.Type = corev1.SecretTypeOpaque
-		if secret.StringData == nil {
-			secret.StringData = map[string]string{}
-		}
-		secret.StringData["username"] = username
-		secret.StringData["password"] = guac.Password
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &guacamolev1alpha1.SecretKeyRef{Name: secretName, Key: "password"}, nil
+	return resolveDesktopCredentials(ctx, r.Client, r.Scheme, pool, pool)
 }
 
 func (r *DesktopPoolReconciler) ensureGuacamoleConnection(
@@ -708,34 +651,7 @@ func scaleDownPriority(state guacamolev1alpha1.DesktopState) int {
 }
 
 func (r *DesktopPoolReconciler) deleteDesktop(ctx context.Context, pool *guacamolev1alpha1.DesktopPool, vmName string) error {
-	conn := &guacamolev1alpha1.GuacamoleConnection{}
-	if err := r.Get(ctx, types.NamespacedName{Name: vmName, Namespace: pool.Namespace}, conn); err == nil {
-		if err := r.Delete(ctx, conn); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
-	}
-
-	svc := &corev1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Name: rdpServiceName(vmName), Namespace: pool.Namespace}, svc); err == nil {
-		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
-	}
-
-	vm := &unstructured.Unstructured{}
-	vm.SetGroupVersionKind(virtualMachineGVK)
-	if err := r.Get(ctx, types.NamespacedName{Name: vmName, Namespace: pool.Namespace}, vm); err == nil {
-		if err := r.Delete(ctx, vm); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
-	}
-	return nil
+	return deleteDesktopResources(ctx, r.Client, pool.Namespace, vmName)
 }
 
 func (r *DesktopPoolReconciler) finalizePool(ctx context.Context, pool *guacamolev1alpha1.DesktopPool) (ctrl.Result, error) {

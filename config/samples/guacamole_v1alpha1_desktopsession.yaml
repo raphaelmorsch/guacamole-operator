@@ -1,11 +1,12 @@
 apiVersion: guacamole.guacamole.io/v1alpha1
 kind: DesktopSession
 metadata:
-  name: desktop-session-example
+  name: desktop-session-usuario1
   namespace: guacamole-desktops
 spec:
   poolRef:
     name: windows-desktop
   requester:
     subject: usuario1
+  # Optional: auto-release after N seconds Ready
   # ttlSecondsAfterReady: 3600

@@ -35,8 +35,8 @@ spec:
       openAPIV3Schema:
         description: |-
           DesktopSession represents a request for an exclusive desktop from a DesktopPool.
-          Allocation and GuacamoleConnection creation are handled by the DesktopSession controller
-          (post-MVP). Until then, DesktopPool can create provisional connections per Available VM.
+          The controller reserves an Available VM, creates a GuacamoleConnection, and on
+          release/delete returns capacity to the pool (recyclePolicy=Delete destroys the VM).
         properties:
           apiVersion:
             description: |-
@@ -163,6 +163,11 @@ spec:
                 type: string
               phase:
                 description: Phase is the current lifecycle phase.
+                type: string
+              readyAt:
+                description: ReadyAt is when the session became Ready (used for TTL
+                  expiry).
+                format: date-time
                 type: string
               serviceDNS:
                 description: ServiceDNS is the RDP Service DNS for the allocated desktop.

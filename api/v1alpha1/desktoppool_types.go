@@ -20,12 +20,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Desktop labels used by the DesktopPool controller.
+// Desktop labels used by the DesktopPool / DesktopSession controllers.
 const (
 	DesktopLabelPool      = "desktop.guacamole.io/pool"
 	DesktopLabelState     = "desktop.guacamole.io/state"
 	DesktopLabelManagedBy = "desktop.guacamole.io/managed-by"
 	DesktopLabelVM        = "desktop.guacamole.io/vm"
+	DesktopLabelSession   = "desktop.guacamole.io/session"
+	DesktopLabelRequester = "desktop.guacamole.io/requester"
 	DesktopManagedByValue = "guacamole-operator"
 )
 

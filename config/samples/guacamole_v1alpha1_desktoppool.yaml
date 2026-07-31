@@ -4,7 +4,6 @@ metadata:
   name: windows-desktop
   namespace: guacamole-desktops
 spec:
-  # MVP: declarative replica count (no autoscaling yet).
   replicas: 2
   source:
     dataSource:
@@ -12,10 +11,9 @@ spec:
       namespace: win2k19-golden
   virtualMachine:
     storageClassName: ocs-external-storagecluster-ceph-rbd-immediate
-    diskSize: 40Gi
+    diskSize: 60Gi
     cpu: 2
     memory: 4Gi
-    # instanceType: u1.large  # optional alternative to cpu/memory
   network:
     rdpPort: 3389
   guacamole:
@@ -23,16 +21,9 @@ spec:
       name: guacamole
       namespace: guacamole
     username: Administrator
-    # Option A (lab): operator creates Secret <pool>-rdp-credentials
     password: "ChangeMe!"
-    # credentialsSecretName: windows-desktop-rdp-credentials  # optional override
-    # Option B (production): reference an existing Secret instead of password
-    # passwordSecretRef:
-    #   name: windows-desktop-credentials
-    #   key: password
     security: nla
     ignoreCert: true
   recyclePolicy: Delete
-  # Provisional MVP strategy: create a GuacamoleConnection per Available VM.
-  # Set to false once DesktopSession allocation owns connection creation.
-  createConnections: true
+  # false = GuacamoleConnection only when a DesktopSession allocates a VM
+  createConnections: false

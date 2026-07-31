@@ -74,6 +74,10 @@ type DesktopSessionStatus struct {
 	// +optional
 	ServiceDNS string `json:"serviceDNS,omitempty"`
 
+	// ReadyAt is when the session became Ready (used for TTL expiry).
+	// +optional
+	ReadyAt *metav1.Time `json:"readyAt,omitempty"`
+
 	// Message holds a human-readable detail for Failed/Pending states.
 	// +optional
 	Message string `json:"message,omitempty"`
@@ -92,8 +96,8 @@ type DesktopSessionStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // DesktopSession represents a request for an exclusive desktop from a DesktopPool.
-// Allocation and GuacamoleConnection creation are handled by the DesktopSession controller
-// (post-MVP). Until then, DesktopPool can create provisional connections per Available VM.
+// The controller reserves an Available VM, creates a GuacamoleConnection, and on
+// release/delete returns capacity to the pool (recyclePolicy=Delete destroys the VM).
 type DesktopSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

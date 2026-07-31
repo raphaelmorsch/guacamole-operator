@@ -77,6 +77,11 @@ spec:
                 description: Guacamole links the pool to a Guacamole instance and
                   RDP credentials.
                 properties:
+                  credentialsSecretName:
+                    description: |-
+                      CredentialsSecretName is the name of the Secret managed from password.
+                      Defaults to "<desktoppool-name>-rdp-credentials".
+                    type: string
                   ignoreCert:
                     default: true
                     description: IgnoreCert accepts self-signed RDP certificates (typical
@@ -101,8 +106,18 @@ spec:
                     description: ParentGroup places generated GuacamoleConnections
                       inside a connection group.
                     type: string
+                  password:
+                    description: |-
+                      Password is the Windows RDP password.
+                      When set, the operator creates/updates a Secret in the DesktopPool namespace
+                      (see credentialsSecretName) and wires GuacamoleConnections to it.
+                      Prefer passwordSecretRef in production; plaintext is convenient for labs.
+                      Ignored when passwordSecretRef is set.
+                    type: string
                   passwordSecretRef:
-                    description: PasswordSecretRef references the RDP password secret.
+                    description: |-
+                      PasswordSecretRef references an existing Secret with the RDP password.
+                      When set, the operator does not create a credentials Secret.
                     properties:
                       key:
                         default: password
@@ -125,7 +140,9 @@ spec:
                     type: string
                   username:
                     default: Administrator
-                    description: Username used for RDP authentication on pooled desktops.
+                    description: |-
+                      Username used for RDP authentication on pooled desktops.
+                      Stored in the managed credentials Secret when password is set.
                     type: string
                 required:
                 - instanceRef
@@ -240,8 +257,9 @@ spec:
                 format: int32
                 type: integer
               conditions:
-                description: Conditions represent the latest available observations
-                  of the pool state.
+                description: |-
+                  Conditions represent the latest available observations of the pool state.
+                  Includes Ready and CloneAuthorized.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -297,6 +315,16 @@ spec:
                   - type
                   type: object
                 type: array
+              credentialsSecret:
+                description: |-
+                  CredentialsSecret is the Secret used for Windows RDP passwords on GuacamoleConnections.
+                  Either the managed secret created from spec.guacamole.password, or the referenced passwordSecretRef.
+                type: string
+              dataSourceNamespace:
+                description: |-
+                  DataSourceNamespace is the golden-image namespace where CDI clone RBAC is provisioned.
+                  Resolved from spec.source.dataSource.namespace (defaults to the pool namespace).
+                type: string
               desired:
                 description: Desired is the target number of desktops.
                 format: int32

@@ -9,10 +9,10 @@ published by the Windows Server 2019 Tekton pipeline.
 | Done now | Later |
 |---|---|
 | `DesktopPool` with declarative `replicas` | Autoscaling via `minReady` / `bufferSize` / `maxSize` |
-| Clone VM from CDI `DataSource` | `DesktopSession` exclusive allocation |
-| Per-VM RDP `Service` | Portal de solicitação |
+| Clone VM from CDI `DataSource` | Portal de solicitação |
+| Per-VM RDP `Service` | |
 | TCP readiness on `:3389` | KEDA-driven pool sizing |
-| Provisional `GuacamoleConnection` per Available VM | Connection only on session reserve |
+| `DesktopSession` exclusive allocation + GuacamoleConnection | |
 
 ## Flow
 
@@ -97,6 +97,8 @@ namespace still needs the golden image.
 |---|---|
 | `desktop.guacamole.io/pool` | Pool ownership |
 | `desktop.guacamole.io/state` | `Provisioning` / `Booting` / `Available` / `Allocated` / `Failed` |
+| `desktop.guacamole.io/session` | DesktopSession that reserved the VM |
+| `desktop.guacamole.io/requester` | Subject that requested the session |
 | `desktop.guacamole.io/managed-by` | `guacamole-operator` |
 | `desktop.guacamole.io/vm` | Links Service/Connection to a VM |
 
@@ -111,23 +113,40 @@ A desktop becomes `Available` only when:
 
 Probe interface: `internal/readiness.DesktopReadinessProber` (fakeable in tests).
 
-## DesktopSession (next)
+## DesktopSession
+
+With `createConnections: false`, connections appear only when a session allocates a VM:
 
 ```yaml
 apiVersion: guacamole.guacamole.io/v1alpha1
 kind: DesktopSession
 metadata:
-  generateName: desktop-session-
+  name: desktop-session-usuario1
+  namespace: guacamole-desktops
 spec:
   poolRef:
     name: windows-desktop
   requester:
     subject: usuario1
+  # ttlSecondsAfterReady: 3600
 ```
 
-When allocation is enabled: Pending → reserve Available VM → Allocated → create
-`GuacamoleConnection` → Ready. On delete with `recyclePolicy: Delete`, the VM is
-removed and the pool replenishes.
+Flow:
+
+```text
+Pending → reserve Available VM (label state=Allocated)
+       → create GuacamoleConnection (owned by session, READ for requester.subject)
+       → Ready
+delete/TTL → remove connection → Delete VM (recyclePolicy)
+           → DesktopPool replenishes Available buffer
+```
+
+```bash
+oc apply -f config/samples/guacamole_v1alpha1_desktopsession.yaml
+oc get desktopsession -n guacamole-desktops -w
+# when Ready, open Guacamole — connection named after the session appears
+oc delete desktopsession desktop-session-usuario1 -n guacamole-desktops
+```
 
 ## Success criteria (MVP)
 

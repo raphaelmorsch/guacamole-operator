@@ -5,9 +5,9 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator-catalog:0.0.12
+  image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator-catalog:0.0.14
   displayName: Guacamole Operator Catalog
   publisher: Raphael Morsch
   updateStrategy:
     registryPoll:
-      interval: 10m
+      interval: 5m

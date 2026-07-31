@@ -108,8 +108,8 @@ spec:
       version: v1alpha1
     - description: |-
         DesktopSession represents a request for an exclusive desktop from a DesktopPool.
-        Allocation and GuacamoleConnection creation are handled by the DesktopSession controller
-        (post-MVP). Until then, DesktopPool can create provisional connections per Available VM.
+        The controller reserves an Available VM, creates a GuacamoleConnection, and on
+        release/delete returns capacity to the pool (recyclePolicy=Delete destroys the VM).
       displayName: Desktop Session
       kind: DesktopSession
       name: desktopsessions.guacamole.guacamole.io
