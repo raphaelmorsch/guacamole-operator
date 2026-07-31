@@ -142,8 +142,8 @@ metadata:
       ]
     capabilities: Full Lifecycle
     categories: Networking
-    containerImage: default-route-openshift-image-registry.apps.cluster-nvf2r.dyn.redhatworkshops.io/guacamole-operator/guacamole-operator:0.0.12
-    createdAt: "2026-07-31T17:40:30Z"
+    containerImage: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator:0.0.15
+    createdAt: "2026-07-31T18:06:59Z"
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"
@@ -151,7 +151,7 @@ metadata:
     operators.operatorframework.io/builder: operator-sdk-v1.37.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
     repository: https://github.com/raphaelmorsch/guacamole-operator
-  name: guacamole-operator.v0.0.14
+  name: guacamole-operator.v0.0.15
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -220,6 +220,7 @@ spec:
           resources:
           - endpoints
           - persistentvolumeclaims
+          - pods
           - secrets
           - serviceaccounts
           - services
@@ -411,7 +412,7 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
-                image: default-route-openshift-image-registry.apps.cluster-nvf2r.dyn.redhatworkshops.io/guacamole-operator/guacamole-operator:0.0.14
+                image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator:0.0.15
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -507,4 +508,5 @@ spec:
   relatedImages:
   - image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-metrics-exporter:0.0.12
     name: guacamole-metrics-exporter
-  version: 0.0.14
+  replaces: guacamole-operator.v0.0.12
+  version: 0.0.15
