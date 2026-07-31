@@ -68,6 +68,12 @@ spec:
                   DisplayName is the connection name shown in the Guacamole UI.
                   Defaults to the resource name when unset.
                 type: string
+              exposeMetrics:
+                default: false
+                description: |-
+                  ExposeMetrics adds this connection to the instance Prometheus exporter.
+                  Active sessions are exposed as guacamole_connection_active_sessions.
+                type: boolean
               guacamoleRef:
                 description: GuacamoleRef links this connection to a Guacamole stack
                   instance.
@@ -235,8 +241,6 @@ spec:
                       name:
                         description: Name of the secret.
                         type: string
-                    required:
-                    - name
                     type: object
                   gatewayPort:
                     description: GatewayPort is the port of the RDP gateway.
@@ -250,7 +254,9 @@ spec:
                     format: int32
                     type: integer
                   hostname:
-                    description: Hostname or IP address of the remote desktop server.
+                    description: |-
+                      Hostname or IP address of the remote desktop server.
+                      Required when the parent connection protocol is rdp.
                     type: string
                   ignoreCert:
                     description: IgnoreCert accepts self-signed or invalid RDP certificates.
@@ -275,8 +281,6 @@ spec:
                       name:
                         description: Name of the secret.
                         type: string
-                    required:
-                    - name
                     type: object
                   port:
                     default: 3389
@@ -332,8 +336,6 @@ spec:
                     description: Width of the remote display in pixels.
                     format: int32
                     type: integer
-                required:
-                - hostname
                 type: object
               ssh:
                 description: SSH holds protocol parameters when protocol is "ssh".
@@ -356,7 +358,9 @@ spec:
                     format: int32
                     type: integer
                   hostname:
-                    description: Hostname or IP address of the SSH server.
+                    description: |-
+                      Hostname or IP address of the SSH server.
+                      Required when the parent connection protocol is ssh.
                     type: string
                   passphrase:
                     description: Passphrase for the private key.
@@ -372,8 +376,6 @@ spec:
                       name:
                         description: Name of the secret.
                         type: string
-                    required:
-                    - name
                     type: object
                   password:
                     description: Password for SSH authentication.
@@ -389,8 +391,6 @@ spec:
                       name:
                         description: Name of the secret.
                         type: string
-                    required:
-                    - name
                     type: object
                   port:
                     default: 22
@@ -411,14 +411,10 @@ spec:
                       name:
                         description: Name of the secret.
                         type: string
-                    required:
-                    - name
                     type: object
                   username:
                     description: Username for SSH authentication.
                     type: string
-                required:
-                - hostname
                 type: object
               vnc:
                 description: VNC holds protocol parameters when protocol is "vnc".
@@ -442,7 +438,9 @@ spec:
                     format: int32
                     type: integer
                   hostname:
-                    description: Hostname or IP address of the VNC server.
+                    description: |-
+                      Hostname or IP address of the VNC server.
+                      Required when the parent connection protocol is vnc.
                     type: string
                   password:
                     description: Password for VNC authentication.
@@ -458,8 +456,6 @@ spec:
                       name:
                         description: Name of the secret.
                         type: string
-                    required:
-                    - name
                     type: object
                   port:
                     default: 5900
@@ -476,13 +472,25 @@ spec:
                     description: Width of the remote display in pixels.
                     format: int32
                     type: integer
-                required:
-                - hostname
                 type: object
             required:
             - guacamoleRef
             - protocol
             type: object
+            x-kubernetes-validations:
+            - message: spec.rdp.hostname is required when protocol is rdp
+              rule: self.protocol != 'rdp' || has(self.rdp) && self.rdp.hostname !=
+                ''
+            - message: spec.vnc.hostname is required when protocol is vnc
+              rule: self.protocol != 'vnc' || has(self.vnc) && self.vnc.hostname !=
+                ''
+            - message: spec.ssh.hostname is required when protocol is ssh
+              rule: self.protocol != 'ssh' || has(self.ssh) && self.ssh.hostname !=
+                ''
+            - message: spec.additionalParameters is required when protocol is telnet
+                or kubernetes
+              rule: '!(self.protocol in [''telnet'',''kubernetes'']) || size(self.additionalParameters)
+                > 0'
           status:
             description: GuacamoleConnectionStatus defines the observed state of GuacamoleConnection.
             properties:

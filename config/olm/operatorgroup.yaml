@@ -9,5 +9,5 @@ apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
   name: guacamole-operator
-  namespace: guacamole-operator-system
+  namespace: guacamole-operator
 spec: {}

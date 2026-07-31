@@ -1,0 +1,27 @@
+# permissions for end users to edit desktoppools.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: guacamole-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: desktoppool-editor-role
+rules:
+- apiGroups:
+  - guacamole.guacamole.io
+  resources:
+  - desktoppools
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - guacamole.guacamole.io
+  resources:
+  - desktoppools/status
+  verbs:
+  - get

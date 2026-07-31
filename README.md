@@ -2,14 +2,16 @@
 
 Operator Kubernetes/OpenShift para implantar **Apache Guacamole** de forma declarativa no Red Hat OpenShift. Baseado na implementação de referência [guacamole-rdp](https://github.com/raphaelmorsch/guacamole-rdp).
 
-**Versão estável atual:** `0.0.6`
+**Versão estável atual:** `0.0.9`
 
 ## Custom Resources
 
 | CRD | Descrição |
 |---|---|
-| `Guacamole` | Provisiona a stack completa (MySQL, guacd, web, Route, HPA) |
+| `Guacamole` | Provisiona a stack completa (MySQL, guacd, web, Route, HPA, métricas Prometheus) |
 | `GuacamoleConnection` | Cria conexões RDP/VNC/SSH no banco MySQL da instância |
+| `DesktopPool` | Pool de VMs Windows clonadas de um DataSource golden (OpenShift Virtualization) |
+| `DesktopSession` | Solicitação de desktop exclusivo a partir de um `DesktopPool` (alocação post-MVP) |
 
 Para cada recurso `Guacamole`, o operator provisiona automaticamente:
 
@@ -17,6 +19,7 @@ Para cada recurso `Guacamole`, o operator provisiona automaticamente:
 - **guacd** (proxy RDP/VNC/SSH) com HPA opcional
 - **Guacamole web** com HPA opcional
 - **Route OpenShift** com path `/guacamole`
+- **Exporter Prometheus** opcional — ativado por `exposeMetrics` em cada `GuacamoleConnection`
 
 Para cada recurso `GuacamoleConnection`, o operator sincroniza:
 
@@ -35,6 +38,94 @@ flowchart LR
     Guac --> MySQL[(MySQL PVC)]
     Guacd --> Target[VM RDP/VNC/SSH]
     ConnCR[GuacamoleConnection CR] --> MySQL
+    Metrics[Metrics Exporter] --> MySQL
+    Prometheus[Prometheus] --> Metrics
+    KEDA[KEDA ScaledObject] --> Prometheus
+```
+
+---
+
+## Métricas Prometheus (KEDA)
+
+O Pod de métricas (`{guacamole-name}-metrics`) é criado **automaticamente** quando pelo menos um `GuacamoleConnection` tem `spec.exposeMetrics: true`. Cada conexão marcada adiciona uma query ao exporter compartilhado da instância.
+
+### Habilitar no GuacamoleConnection
+
+```yaml
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: GuacamoleConnection
+metadata:
+  name: windows-jumphost
+spec:
+  guacamoleRef:
+    name: guacamole
+  displayName: Windows Jump Host
+  exposeMetrics: true   # checkbox — inclui esta conexão no Pod de metrics
+  protocol: rdp
+  rdp:
+    hostname: 10.0.0.4
+```
+
+Configuração opcional da imagem/porta do exporter no CR `Guacamole`:
+
+```yaml
+spec:
+  metricsExporter:
+    image: default-route-openshift-image-registry.apps.<cluster>/guacamole/guacamole-metrics-exporter:0.0.7
+    port: 9110
+    scrapeIntervalSeconds: 15
+```
+
+### Query por conexão
+
+Para cada conexão monitorada, o exporter executa:
+
+```sql
+SELECT COUNT(*)
+FROM guacamole_connection_history
+WHERE end_date IS NULL AND connection_id = ?
+```
+
+Enquanto `connection_id` ainda não existir no status, usa `connection_name` como fallback.
+
+### Métricas expostas
+
+| Métrica | Labels | Uso |
+|---|---|---|
+| `guacamole_connection_active_sessions` | `connection_id`, `connection_name`, `remote_host` | Sessões ativas por conexão (KEDA) |
+| `guacamole_metrics_exporter_last_scrape_success` | — | Health do scrape MySQL |
+
+O label `remote_host` vem do hostname do protocolo (`spec.rdp.hostname`, etc.) — identifica a VM destino.
+
+### Build da imagem do exporter
+
+```bash
+podman build --platform linux/amd64 -f Dockerfile.metrics-exporter \
+  -t default-route-openshift-image-registry.apps.<cluster>/guacamole/guacamole-metrics-exporter:0.0.7 .
+
+podman push --tls-verify=false \
+  default-route-openshift-image-registry.apps.<cluster>/guacamole/guacamole-metrics-exporter:0.0.7
+```
+
+### Exemplo KEDA
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vm-pool-scaler
+spec:
+  scaleTargetRef:
+    name: windows-vm-pool
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.openshift-monitoring.svc:9090
+        query: |
+          sum(guacamole_connection_active_sessions{remote_host="10.0.0.4"})
+        threshold: "5"
 ```
 
 ---
@@ -43,6 +134,7 @@ flowchart LR
 
 | Versão | Principais mudanças |
 |---|---|
+| **0.0.7** | Métricas por conexão — `exposeMetrics` no `GuacamoleConnection` |
 | **0.0.6** | CRD `GuacamoleConnection` — conexões declarativas no MySQL |
 | **0.0.5** | HPA para guacd + Route com path `/guacamole` |
 | **0.0.4** | HPA para Guacamole web + fix do init do schema MySQL |
@@ -377,7 +469,12 @@ spec:
     minReplicas: 1
     maxReplicas: 5
     targetMemoryUtilizationPercentage: 80
+  metricsExporter:
+    port: 9110
+    scrapeIntervalSeconds: 15
 ```
+
+> **Métricas:** marque `spec.exposeMetrics: true` em cada `GuacamoleConnection` desejado (ver seção Métricas Prometheus). Opcionalmente configure `spec.metricsExporter.image` no CR `Guacamole`.
 
 > **HPA por memória:** requer `requests.memory` definido nos resources do componente (o operator já aplica defaults). Com autoscaling habilitado, o operator não sobrescreve as réplicas gerenciadas pelo HPA.
 
@@ -397,6 +494,7 @@ spec:
   guacamoleRef:
     name: guacamole
   displayName: Windows Jump Host
+  exposeMetrics: true
   protocol: rdp
   rdp:
     hostname: 10.0.0.4

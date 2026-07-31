@@ -69,6 +69,33 @@ type GuacamoleSpec struct {
 	// GuacdAutoscaling configures horizontal pod autoscaling for the guacd proxy deployment.
 	// +optional
 	GuacdAutoscaling AutoscalingSpec `json:"guacdAutoscaling,omitempty"`
+
+	// MetricsExporter configures the shared Prometheus exporter deployment.
+	// The deployment is created when any GuacamoleConnection has spec.exposeMetrics enabled.
+	// +optional
+	MetricsExporter MetricsExporterSpec `json:"metricsExporter,omitempty"`
+}
+
+// MetricsExporterSpec configures the shared Prometheus exporter for a Guacamole instance.
+type MetricsExporterSpec struct {
+	// Image is the container image for the metrics exporter.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Port is the HTTP port where /metrics is served.
+	// +kubebuilder:default=9110
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port *int32 `json:"port,omitempty"`
+
+	// ScrapeIntervalSeconds is how often the exporter polls MySQL for active sessions.
+	// +kubebuilder:default=15
+	// +kubebuilder:validation:Minimum=5
+	ScrapeIntervalSeconds *int32 `json:"scrapeIntervalSeconds,omitempty"`
+
+	// Resources defines resource requirements for the metrics exporter container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // AutoscalingSpec configures an HPA for a deployment.
@@ -161,6 +188,10 @@ type GuacamoleResources struct {
 	// MySQL resource requirements for the database container.
 	// +optional
 	MySQL corev1.ResourceRequirements `json:"mysql,omitempty"`
+
+	// MetricsExporter resource requirements for the Prometheus exporter container.
+	// +optional
+	MetricsExporter corev1.ResourceRequirements `json:"metricsExporter,omitempty"`
 }
 
 // GuacamolePhase represents the high-level lifecycle phase of the instance.

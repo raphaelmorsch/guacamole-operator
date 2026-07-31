@@ -1,0 +1,34 @@
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: DesktopPool
+metadata:
+  name: windows-desktop
+  namespace: guacamole-desktops
+spec:
+  # MVP: declarative replica count (no autoscaling yet).
+  replicas: 2
+  source:
+    dataSource:
+      name: win2k19-guacamole-desktop
+      namespace: win2k19-golden
+  virtualMachine:
+    storageClassName: ocs-external-storagecluster-ceph-rbd-immediate
+    diskSize: 40Gi
+    cpu: 2
+    memory: 4Gi
+    # instanceType: u1.large  # optional alternative to cpu/memory
+  network:
+    rdpPort: 3389
+  guacamole:
+    instanceRef:
+      name: guacamole
+      namespace: guacamole
+    username: Administrator
+    passwordSecretRef:
+      name: windows-desktop-credentials
+      key: password
+    security: nla
+    ignoreCert: true
+  recyclePolicy: Delete
+  # Provisional MVP strategy: create a GuacamoleConnection per Available VM.
+  # Set to false once DesktopSession allocation owns connection creation.
+  createConnections: true

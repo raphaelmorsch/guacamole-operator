@@ -20,4 +20,31 @@ resources:
   kind: Guacamole
   path: github.com/raphaelmorsch/guacamole-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: guacamole.io
+  group: guacamole
+  kind: GuacamoleConnection
+  path: github.com/raphaelmorsch/guacamole-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: guacamole.io
+  group: guacamole
+  kind: DesktopPool
+  path: github.com/raphaelmorsch/guacamole-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: guacamole.io
+  group: guacamole
+  kind: DesktopSession
+  path: github.com/raphaelmorsch/guacamole-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

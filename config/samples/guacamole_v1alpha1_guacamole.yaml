@@ -30,3 +30,6 @@ spec:
     minReplicas: 1
     maxReplicas: 5
     targetMemoryUtilizationPercentage: 80
+  metricsExporter:
+    port: 9110
+    scrapeIntervalSeconds: 15

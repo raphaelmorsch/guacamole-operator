@@ -46,6 +46,7 @@ type GuacamoleConnectionReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoleconnections/finalizers,verbs=update
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments;services,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GuacamoleConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -80,6 +81,18 @@ func (r *GuacamoleConnectionReconciler) Reconcile(ctx context.Context, req ctrl.
 	if err != nil {
 		logger.Error(err, "failed to reconcile Guacamole connection in database")
 		r.setConnectionStatus(ctx, conn, guacamolev1alpha1.GuacamoleConnectionPhaseFailed, conn.Status.ConnectionID, err)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+
+	guac, err := r.getParentGuacamole(ctx, conn)
+	if err != nil {
+		logger.Error(err, "failed to get parent Guacamole for metrics")
+		r.setConnectionStatus(ctx, conn, guacamolev1alpha1.GuacamoleConnectionPhaseFailed, connectionID, err)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if err := reconcileGuacamoleMetrics(ctx, r.Client, r.Scheme, guac); err != nil {
+		logger.Error(err, "failed to reconcile Guacamole metrics exporter")
+		r.setConnectionStatus(ctx, conn, guacamolev1alpha1.GuacamoleConnectionPhaseFailed, connectionID, err)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
@@ -192,7 +205,10 @@ func (r *GuacamoleConnectionReconciler) finalizeConnection(
 					_ = db.Close()
 				}
 			}
+			_ = reconcileGuacamoleMetrics(ctx, r.Client, r.Scheme, guac)
 		}
+	} else if guac, err := r.getParentGuacamole(ctx, conn); err == nil {
+		_ = reconcileGuacamoleMetrics(ctx, r.Client, r.Scheme, guac)
 	}
 
 	controllerutil.RemoveFinalizer(conn, guacamoleConnectionFinalizer)

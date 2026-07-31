@@ -151,6 +151,9 @@ func (r *GuacamoleReconciler) reconcileStack(ctx context.Context, guac *guacamol
 	if err := r.reconcileGuacamoleAutoscaling(ctx, guac); err != nil {
 		return fmt.Errorf("reconcile guacamole autoscaling: %w", err)
 	}
+	if err := reconcileGuacamoleMetrics(ctx, r.Client, r.Scheme, guac); err != nil {
+		return fmt.Errorf("reconcile metrics exporter: %w", err)
+	}
 
 	if routeEnabled(&guac.Spec) {
 		if err := r.reconcileRoute(ctx, guac); err != nil {

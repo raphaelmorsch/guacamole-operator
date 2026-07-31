@@ -7,6 +7,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - endpoints
   - persistentvolumeclaims
   - secrets
   - services
@@ -22,6 +23,7 @@ rules:
   - apps
   resources:
   - deployments
+  - services
   verbs:
   - create
   - delete
@@ -43,8 +45,23 @@ rules:
   - update
   - watch
 - apiGroups:
+  - cdi.kubevirt.io
+  resources:
+  - datasources
+  - datavolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - guacamole.guacamole.io
   resources:
+  - desktoppools
+  - desktopsessions
   - guacamoleconnections
   - guacamoles
   verbs:
@@ -58,6 +75,8 @@ rules:
 - apiGroups:
   - guacamole.guacamole.io
   resources:
+  - desktoppools/finalizers
+  - desktopsessions/finalizers
   - guacamoleconnections/finalizers
   - guacamoles/finalizers
   verbs:
@@ -65,12 +84,27 @@ rules:
 - apiGroups:
   - guacamole.guacamole.io
   resources:
+  - desktoppools/status
+  - desktopsessions/status
   - guacamoleconnections/status
   - guacamoles/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  - virtualmachines
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - route.openshift.io
   resources:

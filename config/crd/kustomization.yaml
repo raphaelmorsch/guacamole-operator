@@ -4,6 +4,8 @@
 resources:
 - bases/guacamole.guacamole.io_guacamoles.yaml
 - bases/guacamole.guacamole.io_guacamoleconnections.yaml
+- bases/guacamole.guacamole.io_desktoppools.yaml
+- bases/guacamole.guacamole.io_desktopsessions.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

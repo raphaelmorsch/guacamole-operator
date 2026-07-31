@@ -82,7 +82,7 @@ func (r *GuacamoleConnectionReconciler) resolveSecretValue(
 	namespace string,
 	ref *guacamolev1alpha1.SecretKeyRef,
 ) (string, error) {
-	if ref == nil {
+	if ref == nil || ref.Name == "" {
 		return "", nil
 	}
 	secret := &corev1.Secret{}

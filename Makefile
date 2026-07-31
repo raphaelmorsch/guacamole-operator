@@ -3,7 +3,14 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.1
+VERSION ?= 0.0.12
+
+# Internal OpenShift registry URL for images pulled by workloads in other namespaces.
+OPENSHIFT_INTERNAL_REGISTRY ?= image-registry.openshift-image-registry.svc:5000
+
+# Image URL for the Guacamole metrics exporter sidecar deployment.
+# Uses the internal registry so Guacamole instances in any namespace can pull it.
+METRICS_EXPORTER_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator-system/guacamole-metrics-exporter:$(VERSION)
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -51,6 +58,7 @@ endif
 OPERATOR_SDK_VERSION ?= v1.37.0
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+METRICS_EXPORTER_IMG ?= guacamole/guacamole-metrics-exporter:0.0.10
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.29.0
 
@@ -147,6 +155,14 @@ docker-build: ## Build docker image with the manager.
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: docker-build-metrics-exporter
+docker-build-metrics-exporter: ## Build docker image with the Guacamole metrics exporter.
+	$(CONTAINER_TOOL) build -f Dockerfile.metrics-exporter -t ${METRICS_EXPORTER_IMG} .
+
+.PHONY: docker-push-metrics-exporter
+docker-push-metrics-exporter: ## Push docker image with the Guacamole metrics exporter.
+	$(CONTAINER_TOOL) push ${METRICS_EXPORTER_IMG}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
@@ -269,7 +285,10 @@ endif
 bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
 	$(OPERATOR_SDK) generate kustomize manifests -q
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
+	cp config/default/manager_auth_proxy_patch.yaml config/default/manager_auth_proxy_patch.yaml.bundlebak
+	sed 's|__METRICS_EXPORTER_IMAGE__|$(METRICS_EXPORTER_IMG)|g' config/default/manager_auth_proxy_patch.yaml.bundlebak > config/default/manager_auth_proxy_patch.yaml
 	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
+	mv config/default/manager_auth_proxy_patch.yaml.bundlebak config/default/manager_auth_proxy_patch.yaml
 	$(OPERATOR_SDK) bundle validate ./bundle
 
 .PHONY: bundle-build

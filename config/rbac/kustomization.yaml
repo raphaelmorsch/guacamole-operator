@@ -24,3 +24,7 @@ resources:
 - guacamole_viewer_role.yaml
 - guacamoleconnection_editor_role.yaml
 - guacamoleconnection_viewer_role.yaml
+- desktoppool_editor_role.yaml
+- desktoppool_viewer_role.yaml
+- desktopsession_editor_role.yaml
+- desktopsession_viewer_role.yaml

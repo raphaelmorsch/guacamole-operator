@@ -21,6 +21,10 @@ import (
 )
 
 // GuacamoleConnectionSpec defines a Guacamole connection stored in the instance database.
+// +kubebuilder:validation:XValidation:rule="self.protocol != 'rdp' || has(self.rdp) && self.rdp.hostname != ''",message="spec.rdp.hostname is required when protocol is rdp"
+// +kubebuilder:validation:XValidation:rule="self.protocol != 'vnc' || has(self.vnc) && self.vnc.hostname != ''",message="spec.vnc.hostname is required when protocol is vnc"
+// +kubebuilder:validation:XValidation:rule="self.protocol != 'ssh' || has(self.ssh) && self.ssh.hostname != ''",message="spec.ssh.hostname is required when protocol is ssh"
+// +kubebuilder:validation:XValidation:rule="!(self.protocol in ['telnet','kubernetes']) || size(self.additionalParameters) > 0",message="spec.additionalParameters is required when protocol is telnet or kubernetes"
 type GuacamoleConnectionSpec struct {
 	// GuacamoleRef links this connection to a Guacamole stack instance.
 	GuacamoleRef GuacamoleInstanceRef `json:"guacamoleRef"`
@@ -70,6 +74,11 @@ type GuacamoleConnectionSpec struct {
 	// Permissions grants users or groups access to this connection.
 	// +optional
 	Permissions []ConnectionPermissionSpec `json:"permissions,omitempty"`
+
+	// ExposeMetrics adds this connection to the instance Prometheus exporter.
+	// Active sessions are exposed as guacamole_connection_active_sessions.
+	// +kubebuilder:default=false
+	ExposeMetrics *bool `json:"exposeMetrics,omitempty"`
 }
 
 // GuacamoleInstanceRef references a Guacamole custom resource.
@@ -102,10 +111,12 @@ type ConnectionProxySpec struct {
 // SecretKeyRef references a key in a Kubernetes Secret.
 type SecretKeyRef struct {
 	// Name of the secret.
-	Name string `json:"name"`
+	// +optional
+	Name string `json:"name,omitempty"`
 
 	// Key within the secret.
 	// +kubebuilder:default="password"
+	// +optional
 	Key string `json:"key,omitempty"`
 }
 
@@ -113,7 +124,9 @@ type SecretKeyRef struct {
 // See https://guacamole.apache.org/doc/gug/configuring-guacamole.html#rdp
 type RDPConnectionSpec struct {
 	// Hostname or IP address of the remote desktop server.
-	Hostname string `json:"hostname"`
+	// Required when the parent connection protocol is rdp.
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
 
 	// Port of the RDP server.
 	// +kubebuilder:default=3389
@@ -292,7 +305,9 @@ type RDPConnectionSpec struct {
 // VNCConnectionSpec maps to guacamole_connection_parameter rows for VNC.
 type VNCConnectionSpec struct {
 	// Hostname or IP address of the VNC server.
-	Hostname string `json:"hostname"`
+	// Required when the parent connection protocol is vnc.
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
 
 	// Port of the VNC server.
 	// +kubebuilder:default=5900
@@ -340,7 +355,9 @@ type VNCConnectionSpec struct {
 // SSHConnectionSpec maps to guacamole_connection_parameter rows for SSH.
 type SSHConnectionSpec struct {
 	// Hostname or IP address of the SSH server.
-	Hostname string `json:"hostname"`
+	// Required when the parent connection protocol is ssh.
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
 
 	// Port of the SSH server.
 	// +kubebuilder:default=22
