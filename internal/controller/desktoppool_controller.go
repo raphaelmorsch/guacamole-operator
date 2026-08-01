@@ -36,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	guacamolev1alpha1 "github.com/raphaelmorsch/guacamole-operator/api/v1alpha1"
@@ -45,8 +46,8 @@ import (
 const (
 	desktopPoolFinalizer = "guacamole.guacamole.io/desktoppool-finalizer"
 
-	virtualMachineAPIVersion = "kubevirt.io/v1"
-	virtualMachineKind       = "VirtualMachine"
+	virtualMachineAPIVersion   = "kubevirt.io/v1"
+	virtualMachineKind         = "VirtualMachine"
 	virtualMachineInstanceKind = "VirtualMachineInstance"
 )
 
@@ -74,6 +75,7 @@ type DesktopPoolReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktoppools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktoppools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoleconnections,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktopsessions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services;endpoints;secrets;serviceaccounts;pods;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
@@ -175,6 +177,23 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	// Power management before provisional connections so we don't create
+	// GuacamoleConnections for desktops about to be stopped.
+	vms, err = r.listPoolVMs(ctx, pool)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	nextIdle, err := r.reconcilePowerManagement(ctx, pool, vms)
+	if err != nil {
+		logger.Error(err, "power management reconcile failed")
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, err
+	}
+	vms, err = r.listPoolVMs(ctx, pool)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	members = syncMemberStatesFromVMs(vms, members)
+
 	var credentialsSecretName string
 	if poolCreatesConnections(pool) {
 		credRef, err := r.ensureCredentialsSecret(ctx, pool)
@@ -211,12 +230,12 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	statusCounts := summarizeMembers(members)
 	phase := guacamolev1alpha1.DesktopPoolPhaseReady
 	reason := "ReplicasReady"
-	message := fmt.Sprintf("desired=%d available=%d", desired, statusCounts.available)
+	message := fmt.Sprintf("desired=%d available=%d stopped=%d", desired, statusCounts.available, statusCounts.stopped)
 	if statusCounts.provisioning > 0 || statusCounts.failed > 0 {
 		phase = guacamolev1alpha1.DesktopPoolPhaseScaling
 		reason = "Provisioning"
-		message = fmt.Sprintf("desired=%d provisioning=%d available=%d failed=%d",
-			desired, statusCounts.provisioning, statusCounts.available, statusCounts.failed)
+		message = fmt.Sprintf("desired=%d provisioning=%d available=%d stopped=%d failed=%d",
+			desired, statusCounts.provisioning, statusCounts.available, statusCounts.stopped, statusCounts.failed)
 	}
 	if desired == 0 {
 		phase = guacamolev1alpha1.DesktopPoolPhasePending
@@ -224,12 +243,14 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		message = "replicas is 0"
 	}
 
+	pmEnabled := powerManagementEnabled(pool)
 	if err := r.patchStatus(ctx, pool, func(status *guacamolev1alpha1.DesktopPoolStatus) {
 		status.Phase = phase
 		status.Desired = desired
 		status.Provisioning = statusCounts.provisioning
 		status.Available = statusCounts.available
 		status.Allocated = statusCounts.allocated
+		status.Stopped = statusCounts.stopped
 		status.Failed = statusCounts.failed
 		status.DataSourceNamespace = dataSourceNamespace(pool)
 		if credentialsSecretName != "" {
@@ -244,6 +265,14 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		setDesktopPoolCondition(status, "CloneAuthorized", metav1.ConditionTrue, "CloneRBACReady",
 			fmt.Sprintf("clone RBAC ready in namespace %s", dataSourceNamespace(pool)))
 		setDesktopPoolCondition(status, "Ready", condStatus, reason, message)
+		pmStatus := metav1.ConditionFalse
+		pmReason := "Disabled"
+		if pmEnabled {
+			pmStatus = metav1.ConditionTrue
+			pmReason = "Enabled"
+		}
+		setDesktopPoolCondition(status, "PowerManagement", pmStatus, pmReason,
+			powerManagementConditionMessage(pool, pmEnabled))
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -251,6 +280,12 @@ func (r *DesktopPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	requeueAfter := 2 * time.Minute
 	if statusCounts.provisioning > 0 || statusCounts.failed > 0 {
 		requeueAfter = 20 * time.Second
+	}
+	if nextIdle > 0 && nextIdle < requeueAfter {
+		requeueAfter = nextIdle
+		if requeueAfter < 5*time.Second {
+			requeueAfter = 5 * time.Second
+		}
 	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
@@ -272,6 +307,14 @@ func (r *DesktopPoolReconciler) reconcileDesktopMember(
 		state == guacamolev1alpha1.DesktopStateInUse ||
 		state == guacamolev1alpha1.DesktopStateReleasing ||
 		state == guacamolev1alpha1.DesktopStateDeleting {
+		return member, nil
+	}
+
+	// Power-managed halt: keep Stopped without treating missing VMI/RDP as Failed.
+	if isVMIntentionallyStopped(vm) {
+		_ = r.setVMStateLabel(ctx, vm, guacamolev1alpha1.DesktopStateStopped)
+		member.State = guacamolev1alpha1.DesktopStateStopped
+		member.Message = "powered-off"
 		return member, nil
 	}
 
@@ -297,7 +340,14 @@ func (r *DesktopPoolReconciler) reconcileDesktopMember(
 		return member, nil
 	}
 
-	_ = r.setVMStateLabel(ctx, vm, guacamolev1alpha1.DesktopStateAvailable)
+	prev := desktopStateFromLabels(vm)
+	if prev != guacamolev1alpha1.DesktopStateAvailable {
+		if err := r.markDesktopAvailable(ctx, vm); err != nil {
+			return member, err
+		}
+	} else {
+		_ = r.ensureAvailableSince(ctx, vm)
+	}
 	member.State = guacamolev1alpha1.DesktopStateAvailable
 	member.Message = ""
 	return member, nil
@@ -448,14 +498,14 @@ func buildDesktopVirtualMachine(pool *guacamolev1alpha1.DesktopPool, vmName, dis
 	}
 
 	spec := map[string]interface{}{
-		"runStrategy": "Always",
+		"runStrategy":         "Always",
 		"dataVolumeTemplates": []interface{}{dvTemplate},
 		"template": map[string]interface{}{
 			"metadata": map[string]interface{}{
 				"labels": templateLabels,
 			},
 			"spec": map[string]interface{}{
-				"domain": domain,
+				"domain":             domain,
 				"serviceAccountName": desktopPoolCloneServiceAccount,
 				"networks": []interface{}{
 					map[string]interface{}{
@@ -607,7 +657,8 @@ func (r *DesktopPoolReconciler) scaleDown(
 	candidates := make([]guacamolev1alpha1.DesktopMemberStatus, 0, len(members))
 	for _, m := range members {
 		switch m.State {
-		case guacamolev1alpha1.DesktopStateAvailable,
+		case guacamolev1alpha1.DesktopStateStopped,
+			guacamolev1alpha1.DesktopStateAvailable,
 			guacamolev1alpha1.DesktopStateProvisioning,
 			guacamolev1alpha1.DesktopStateBooting,
 			guacamolev1alpha1.DesktopStateFailed:
@@ -640,12 +691,14 @@ func scaleDownPriority(state guacamolev1alpha1.DesktopState) int {
 	switch state {
 	case guacamolev1alpha1.DesktopStateFailed:
 		return 0
-	case guacamolev1alpha1.DesktopStateProvisioning:
+	case guacamolev1alpha1.DesktopStateStopped:
 		return 1
-	case guacamolev1alpha1.DesktopStateBooting:
+	case guacamolev1alpha1.DesktopStateProvisioning:
 		return 2
-	case guacamolev1alpha1.DesktopStateAvailable:
+	case guacamolev1alpha1.DesktopStateBooting:
 		return 3
+	case guacamolev1alpha1.DesktopStateAvailable:
+		return 4
 	default:
 		return 99
 	}
@@ -771,6 +824,10 @@ func (r *DesktopPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Owns(&guacamolev1alpha1.GuacamoleConnection{}).
+		Watches(
+			&guacamolev1alpha1.DesktopSession{},
+			handler.EnqueueRequestsFromMapFunc(r.mapSessionToPool),
+		).
 		Complete(r)
 }
 
@@ -876,6 +933,7 @@ type memberCounts struct {
 	provisioning int32
 	available    int32
 	allocated    int32
+	stopped      int32
 	failed       int32
 }
 
@@ -887,6 +945,8 @@ func summarizeMembers(members []guacamolev1alpha1.DesktopMemberStatus) memberCou
 			c.available++
 		case guacamolev1alpha1.DesktopStateAllocated, guacamolev1alpha1.DesktopStateInUse:
 			c.allocated++
+		case guacamolev1alpha1.DesktopStateStopped:
+			c.stopped++
 		case guacamolev1alpha1.DesktopStateFailed:
 			c.failed++
 		default:

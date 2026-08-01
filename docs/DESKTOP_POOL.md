@@ -8,11 +8,13 @@ published by the Windows Server 2019 Tekton pipeline.
 
 | Done now | Later |
 |---|---|
-| `DesktopPool` with declarative `replicas` | Autoscaling via `minReady` / `bufferSize` / `maxSize` |
-| Clone VM from CDI `DataSource` | Portal de solicitação |
-| Per-VM RDP `Service` | |
+| `DesktopPool` with declarative `replicas` | Autoscaling via `bufferSize` / `maxSize` |
+| Clone VM from CDI `DataSource` | Calendar / scheduled power windows |
+| Per-VM RDP `Service` | Guest hibernate (only KubeVirt Halted today) |
 | TCP readiness on `:3389` | KEDA-driven pool sizing |
 | `DesktopSession` exclusive allocation + GuacamoleConnection | |
+| Power management (idle stop + wake on demand) | |
+| Desktop Portal (Keycloak users + batch sessions) | |
 
 ## Flow
 
@@ -64,7 +66,29 @@ spec:
     #   key: password
   recyclePolicy: Delete
   createConnections: true
+  powerManagement:
+    enabled: true
+    idleSeconds: 900   # 15 minutes
+  # minReady: 0        # keep this many warm Available desktops
 ```
+
+## Power management
+
+When `spec.powerManagement` is set (sample enables it by default):
+
+| Behavior | Detail |
+|---|---|
+| Idle stop | `Available` desktops older than `idleSeconds` (default **900**) are stopped (`runStrategy: Halted`, state `Stopped`) |
+| Warm floor | At least `minReady` (default **0**) Available desktops stay running |
+| Wake on demand | Broker waiters (`DesktopSession` Pending/Queued) wake Stopped VMs → `Booting` → RDP ready → `Available` |
+| Manual | Portal / annotation `desktop.guacamole.io/power-request=wake\|suspend` |
+| Allocated | Never stopped |
+
+Status fields: `status.stopped`, condition `PowerManagement`, member state `Stopped`.
+
+Idle clock annotation: `desktop.guacamole.io/available-since` (set when a desktop becomes Available).
+
+Omit `spec.powerManagement` entirely to keep the always-on warm pool (disabled).
 
 ### Credentials
 
@@ -96,7 +120,7 @@ namespace still needs the golden image.
 | Label | Purpose |
 |---|---|
 | `desktop.guacamole.io/pool` | Pool ownership |
-| `desktop.guacamole.io/state` | `Provisioning` / `Booting` / `Available` / `Allocated` / `Failed` |
+| `desktop.guacamole.io/state` | `Provisioning` / `Booting` / `Available` / `Allocated` / `Stopped` / `Failed` |
 | `desktop.guacamole.io/session` | DesktopSession that reserved the VM |
 | `desktop.guacamole.io/requester` | Subject that requested the session |
 | `desktop.guacamole.io/managed-by` | `guacamole-operator` |

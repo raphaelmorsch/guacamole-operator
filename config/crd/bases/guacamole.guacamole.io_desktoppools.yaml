@@ -21,6 +21,9 @@ spec:
     - jsonPath: .status.available
       name: Available
       type: integer
+    - jsonPath: .status.stopped
+      name: Stopped
+      type: integer
     - jsonPath: .status.allocated
       name: Allocated
       type: integer
@@ -169,6 +172,24 @@ spec:
                     format: int32
                     maximum: 65535
                     minimum: 1
+                    type: integer
+                type: object
+              powerManagement:
+                description: PowerManagement controls idle stop / wake-on-demand for
+                  pooled desktops.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled turns idle stop and wake-on-demand on.
+                    type: boolean
+                  idleSeconds:
+                    default: 900
+                    description: |-
+                      IdleSeconds is how long an Available desktop may sit unused before it is
+                      stopped (KubeVirt runStrategy Halted). Default is 900 (15 minutes).
+                      Zero stops Available desktops on the next reconcile (still respecting minReady).
+                    format: int64
+                    minimum: 0
                     type: integer
                 type: object
               recyclePolicy:
@@ -368,6 +389,11 @@ spec:
               provisioning:
                 description: Provisioning is the number of desktops still provisioning
                   or booting.
+                format: int32
+                type: integer
+              stopped:
+                description: Stopped is the number of desktops powered off by power
+                  management.
                 format: int32
                 type: integer
             type: object

@@ -229,17 +229,19 @@ func (r *DesktopSessionReconciler) brokerWaitingMessage(
 	pool *guacamolev1alpha1.DesktopPool,
 	reserveErr error,
 ) string {
-	booting, provisioning := 0, 0
+	booting, provisioning, stopped := 0, 0, 0
 	for _, d := range pool.Status.Desktops {
 		switch d.State {
 		case guacamolev1alpha1.DesktopStateBooting:
 			booting++
 		case guacamolev1alpha1.DesktopStateProvisioning:
 			provisioning++
+		case guacamolev1alpha1.DesktopStateStopped:
+			stopped++
 		}
 	}
 	// Refresh from live VM labels when pool status is stale.
-	if booting+provisioning == 0 {
+	if booting+provisioning+stopped == 0 {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(schema.GroupVersionKind{
 			Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineList",
@@ -254,15 +256,22 @@ func (r *DesktopSessionReconciler) brokerWaitingMessage(
 					booting++
 				case string(guacamolev1alpha1.DesktopStateProvisioning):
 					provisioning++
+				case string(guacamolev1alpha1.DesktopStateStopped):
+					stopped++
 				}
 			}
 		}
 	}
 	switch {
+	case stopped > 0 && booting == 0:
+		return fmt.Sprintf("next in line; waking-desktop (%d stopped)", stopped)
+	case booting > 0 && (provisioning > 0 || stopped > 0):
+		return fmt.Sprintf("next in line; waiting-for-rdp (%d booting, %d provisioning, %d stopped)",
+			booting, provisioning, stopped)
 	case booting > 0 && provisioning > 0:
 		return fmt.Sprintf("next in line; waiting for desktop readiness (%d booting, %d provisioning)", booting, provisioning)
 	case booting > 0:
-		return fmt.Sprintf("next in line; waiting for desktop readiness (%d booting)", booting)
+		return fmt.Sprintf("next in line; waiting-for-rdp (%d booting)", booting)
 	case provisioning > 0:
 		return fmt.Sprintf("next in line; waiting for desktop readiness (%d provisioning)", provisioning)
 	default:
@@ -332,6 +341,7 @@ func (r *DesktopSessionReconciler) reserveAvailableDesktop(
 		labels[guacamolev1alpha1.DesktopLabelSession] = session.Name
 		labels[guacamolev1alpha1.DesktopLabelRequester] = sanitizeLabelValue(session.Spec.Requester.Subject)
 		fresh.SetLabels(labels)
+		clearAvailableSinceAnnotation(fresh)
 		if err := r.Update(ctx, fresh); err != nil {
 			if apierrors.IsConflict(err) {
 				continue
@@ -479,6 +489,7 @@ func (r *DesktopSessionReconciler) markDesktopAvailableForHandoff(ctx context.Co
 	delete(labels, guacamolev1alpha1.DesktopLabelRequester)
 	labels[guacamolev1alpha1.DesktopLabelState] = string(guacamolev1alpha1.DesktopStateAvailable)
 	vm.SetLabels(labels)
+	setAvailableSinceAnnotation(vm, time.Now())
 	return r.Update(ctx, vm)
 }
 

@@ -29,3 +29,9 @@ spec:
   recyclePolicy: Delete
   # false = GuacamoleConnection only when a DesktopSession allocates a VM
   createConnections: false
+  # Idle-stop Available desktops; wake when DesktopSessions are waiting.
+  powerManagement:
+    enabled: true
+    idleSeconds: 900 # 15 minutes
+  # Keep this many warm Available desktops even when idle (default 0).
+  # minReady: 0

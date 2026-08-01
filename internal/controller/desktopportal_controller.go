@@ -71,6 +71,8 @@ type DesktopPortalReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktopportals/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktopportals/finalizers,verbs=update
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktopsessions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktoppools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
@@ -140,6 +142,9 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.ensureSessionRBAC(ctx, portal, names.APIServiceAccount, sessionNS); err != nil {
 		return r.fail(ctx, portal, err.Error())
 	}
+	if err := r.ensureGuacamoleRBACFromPool(ctx, portal, names.APIServiceAccount, portal.Spec.DefaultPool.Name, poolNS); err != nil {
+		return r.fail(ctx, portal, err.Error())
+	}
 	if err := r.ensureAPIDeployment(ctx, portal, names, sessionNS, poolNS, secretName, secretKey); err != nil {
 		return r.fail(ctx, portal, err.Error())
 	}
@@ -180,27 +185,31 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 type portalNames struct {
-	Plugin             string
-	PluginService      string
-	PluginDeployment   string
-	APIService         string
-	APIDeployment      string
-	APIServiceAccount  string
-	SessionRole        string
-	SessionRoleBinding string
+	Plugin               string
+	PluginService        string
+	PluginDeployment     string
+	APIService           string
+	APIDeployment        string
+	APIServiceAccount    string
+	SessionRole          string
+	SessionRoleBinding   string
+	GuacamoleRole        string
+	GuacamoleRoleBinding string
 }
 
 func portalResourceNames(portal *guacamolev1alpha1.DesktopPortal) portalNames {
 	base := fmt.Sprintf("%s-portal", portal.Name)
 	return portalNames{
-		Plugin:             portalPluginName,
-		PluginService:      base + "-plugin",
-		PluginDeployment:   base + "-plugin",
-		APIService:         base + "-api",
-		APIDeployment:      base + "-api",
-		APIServiceAccount:  base + "-api",
-		SessionRole:        base + "-sessions",
-		SessionRoleBinding: base + "-sessions",
+		Plugin:               portalPluginName,
+		PluginService:        base + "-plugin",
+		PluginDeployment:     base + "-plugin",
+		APIService:           base + "-api",
+		APIDeployment:        base + "-api",
+		APIServiceAccount:    base + "-api",
+		SessionRole:          base + "-sessions",
+		SessionRoleBinding:   base + "-sessions",
+		GuacamoleRole:        base + "-guacamole",
+		GuacamoleRoleBinding: base + "-guacamole",
 	}
 }
 
@@ -251,6 +260,11 @@ func (r *DesktopPortalReconciler) finalize(ctx context.Context, portal *guacamol
 		role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: names.SessionRole, Namespace: sessionNS}}
 		_ = r.Delete(ctx, role)
 	}
+	poolNS := portal.Spec.DefaultPool.Namespace
+	if poolNS == "" {
+		poolNS = sessionNS
+	}
+	_ = r.cleanupGuacamoleRBACFromPool(ctx, portal, portal.Spec.DefaultPool.Name, poolNS)
 
 	controllerutil.RemoveFinalizer(portal, desktopPortalFinalizer)
 	if err := r.Update(ctx, portal); err != nil {
@@ -267,6 +281,109 @@ func (r *DesktopPortalReconciler) ensureServiceAccount(ctx context.Context, port
 	return err
 }
 
+func (r *DesktopPortalReconciler) ensureGuacamoleRBACFromPool(
+	ctx context.Context,
+	portal *guacamolev1alpha1.DesktopPortal,
+	saName, poolName, poolNS string,
+) error {
+	if poolName == "" {
+		return nil
+	}
+	pool := &guacamolev1alpha1.DesktopPool{}
+	if err := r.Get(ctx, types.NamespacedName{Name: poolName, Namespace: poolNS}, pool); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	guacName := pool.Spec.Guacamole.InstanceRef.Name
+	if guacName == "" {
+		return nil
+	}
+	guacNS := pool.Spec.Guacamole.InstanceRef.Namespace
+	if guacNS == "" {
+		guacNS = pool.Namespace
+	}
+	return r.ensureGuacamoleRBAC(ctx, portal, saName, guacNS)
+}
+
+func (r *DesktopPortalReconciler) cleanupGuacamoleRBACFromPool(
+	ctx context.Context,
+	portal *guacamolev1alpha1.DesktopPortal,
+	poolName, poolNS string,
+) error {
+	if poolName == "" {
+		return nil
+	}
+	pool := &guacamolev1alpha1.DesktopPool{}
+	if err := r.Get(ctx, types.NamespacedName{Name: poolName, Namespace: poolNS}, pool); err != nil {
+		return nil
+	}
+	guacNS := pool.Spec.Guacamole.InstanceRef.Namespace
+	if guacNS == "" {
+		guacNS = pool.Namespace
+	}
+	if guacNS == portal.Namespace {
+		return nil
+	}
+	names := portalResourceNames(portal)
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: names.GuacamoleRoleBinding, Namespace: guacNS}}
+	_ = r.Delete(ctx, rb)
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: names.GuacamoleRole, Namespace: guacNS}}
+	_ = r.Delete(ctx, role)
+	return nil
+}
+
+func (r *DesktopPortalReconciler) ensureGuacamoleRBAC(
+	ctx context.Context,
+	portal *guacamolev1alpha1.DesktopPortal,
+	saName, guacamoleNS string,
+) error {
+	names := portalResourceNames(portal)
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: names.GuacamoleRole, Namespace: guacamoleNS},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
+		if guacamoleNS == portal.Namespace {
+			if err := controllerutil.SetControllerReference(portal, role, r.Scheme); err != nil {
+				return err
+			}
+		}
+		role.Rules = []rbacv1.PolicyRule{{
+			APIGroups: []string{"guacamole.guacamole.io"},
+			Resources: []string{"guacamoles"},
+			Verbs:     []string{"get", "list", "watch", "patch", "update"},
+		}}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: names.GuacamoleRoleBinding, Namespace: guacamoleNS},
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, rb, func() error {
+		if guacamoleNS == portal.Namespace {
+			if err := controllerutil.SetControllerReference(portal, rb, r.Scheme); err != nil {
+				return err
+			}
+		}
+		rb.RoleRef = rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     names.GuacamoleRole,
+		}
+		rb.Subjects = []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      saName,
+			Namespace: portal.Namespace,
+		}}
+		return nil
+	})
+	return err
+}
+
 func (r *DesktopPortalReconciler) ensureSessionRBAC(ctx context.Context, portal *guacamolev1alpha1.DesktopPortal, saName, sessionNS string) error {
 	names := portalResourceNames(portal)
 	role := &rbacv1.Role{
@@ -279,11 +396,18 @@ func (r *DesktopPortalReconciler) ensureSessionRBAC(ctx context.Context, portal 
 				return err
 			}
 		}
-		role.Rules = []rbacv1.PolicyRule{{
-			APIGroups: []string{"guacamole.guacamole.io"},
-			Resources: []string{"desktopsessions"},
-			Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-		}}
+		role.Rules = []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{"guacamole.guacamole.io"},
+				Resources: []string{"desktopsessions"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+			},
+			{
+				APIGroups: []string{"guacamole.guacamole.io"},
+				Resources: []string{"desktoppools"},
+				Verbs:     []string{"get", "list", "watch", "patch", "update"},
+			},
+		}
 		return nil
 	})
 	if err != nil {

@@ -84,6 +84,83 @@ type tokenCache struct {
 	expiresAt time.Time
 }
 
+type poolPowerManagementView struct {
+	Enabled     bool  `json:"enabled"`
+	IdleSeconds int64 `json:"idleSeconds"`
+}
+
+type poolDesktopView struct {
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+}
+
+type poolStatusResponse struct {
+	Name              string                  `json:"name"`
+	Namespace         string                  `json:"namespace"`
+	Phase             string                  `json:"phase,omitempty"`
+	Desired           int64                   `json:"desired"`
+	Available         int64                   `json:"available"`
+	Allocated         int64                   `json:"allocated"`
+	Stopped           int64                   `json:"stopped"`
+	Provisioning      int64                   `json:"provisioning"`
+	Failed            int64                   `json:"failed"`
+	Replicas          int32                   `json:"replicas"`
+	MinReady          int32                   `json:"minReady"`
+	RecyclePolicy     string                  `json:"recyclePolicy"`
+	CreateConnections bool                    `json:"createConnections"`
+	PowerManagement   poolPowerManagementView `json:"powerManagement"`
+	Desktops          []poolDesktopView       `json:"desktops,omitempty"`
+}
+
+// poolConfigUpdate is the subset of DesktopPoolSpec editable from the portal.
+type poolConfigUpdate struct {
+	Replicas          *int32 `json:"replicas,omitempty"`
+	MinReady          *int32 `json:"minReady,omitempty"`
+	RecyclePolicy     string `json:"recyclePolicy,omitempty"`
+	CreateConnections *bool  `json:"createConnections,omitempty"`
+	PowerManagement   *struct {
+		Enabled     *bool  `json:"enabled,omitempty"`
+		IdleSeconds *int64 `json:"idleSeconds,omitempty"`
+	} `json:"powerManagement,omitempty"`
+}
+
+type guacamoleOpenIDView struct {
+	Configured        bool   `json:"configured"`
+	Enabled           bool   `json:"enabled"`
+	Issuer            string `json:"issuer,omitempty"`
+	ClientID          string `json:"clientID,omitempty"`
+	UsernameClaimType string `json:"usernameClaimType,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	ExtensionPriority string `json:"extensionPriority,omitempty"`
+	RedirectURI       string `json:"redirectURI,omitempty"`
+}
+
+type guacamoleStatusResponse struct {
+	Name          string              `json:"name"`
+	Namespace     string              `json:"namespace"`
+	Phase         string              `json:"phase,omitempty"`
+	RouteURL      string              `json:"routeURL,omitempty"`
+	Replicas      int32               `json:"replicas"`
+	GuacdReplicas int32               `json:"guacdReplicas"`
+	LogLevel      string              `json:"logLevel"`
+	RouteEnabled  bool                `json:"routeEnabled"`
+	OpenID        guacamoleOpenIDView `json:"openID"`
+}
+
+type guacamoleConfigUpdate struct {
+	Replicas      *int32 `json:"replicas,omitempty"`
+	GuacdReplicas *int32 `json:"guacdReplicas,omitempty"`
+	LogLevel      string `json:"logLevel,omitempty"`
+	RouteEnabled  *bool  `json:"routeEnabled,omitempty"`
+	OpenID        *struct {
+		Enabled           *bool  `json:"enabled,omitempty"`
+		UsernameClaimType string `json:"usernameClaimType,omitempty"`
+		Scope             string `json:"scope,omitempty"`
+		ExtensionPriority string `json:"extensionPriority,omitempty"`
+	} `json:"openID,omitempty"`
+}
+
 func main() {
 	addr := envOr("LISTEN_ADDR", ":8080")
 	cfg := configResponse{
@@ -112,6 +189,16 @@ func main() {
 		Group:    "guacamole.guacamole.io",
 		Version:  "v1alpha1",
 		Resource: "desktopsessions",
+	}
+	poolsGVR := schema.GroupVersionResource{
+		Group:    "guacamole.guacamole.io",
+		Version:  "v1alpha1",
+		Resource: "desktoppools",
+	}
+	guacamolesGVR := schema.GroupVersionResource{
+		Group:    "guacamole.guacamole.io",
+		Version:  "v1alpha1",
+		Resource: "guacamoles",
 	}
 
 	httpClient := &http.Client{
@@ -147,6 +234,86 @@ func main() {
 			return
 		}
 		writeJSON(w, users)
+	})
+	mux.HandleFunc("/pool", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, view)
+		case http.MethodPut, http.MethodPatch:
+			var req poolConfigUpdate
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			if err := updatePoolConfig(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, view)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/guacamole", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, view)
+		case http.MethodPut, http.MethodPatch:
+			var req guacamoleConfigUpdate
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			if err := updateGuacamoleConfig(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, view)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/pool/wake", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := setPoolPowerRequest(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, "wake"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "accepted", "action": "wake"})
+	})
+	mux.HandleFunc("/pool/suspend", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := setPoolPowerRequest(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, "suspend"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "accepted", "action": "suspend"})
 	})
 	mux.HandleFunc("/sessions/batch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -324,6 +491,367 @@ func main() {
 	log.Fatal(<-errCh)
 }
 
+func getPoolStatus(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespace, name string,
+) (*poolStatusResponse, error) {
+	obj, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	status, _, _ := unstructured.NestedMap(obj.Object, "status")
+	spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
+
+	idleSeconds := int64(900)
+	enabled := false
+	if pm, ok := spec["powerManagement"].(map[string]interface{}); ok {
+		enabled = true
+		if v, ok := pm["enabled"].(bool); ok {
+			enabled = v
+		}
+		if v, ok := asInt64(pm["idleSeconds"]); ok {
+			idleSeconds = v
+		}
+	}
+	replicas := int32(1)
+	if v, ok := asInt64(spec["replicas"]); ok {
+		replicas = int32(v)
+	} else if v, ok := asInt64(status["desired"]); ok {
+		replicas = int32(v)
+	}
+	minReady := int32(0)
+	if v, ok := asInt64(spec["minReady"]); ok {
+		minReady = int32(v)
+	}
+	recycle := asString(spec["recyclePolicy"])
+	if recycle == "" {
+		recycle = "Delete"
+	}
+	createConns := true
+	if v, ok := spec["createConnections"].(bool); ok {
+		createConns = v
+	}
+
+	resp := &poolStatusResponse{
+		Name:              obj.GetName(),
+		Namespace:         obj.GetNamespace(),
+		Phase:             asString(status["phase"]),
+		Desired:           asInt64Default(status["desired"], 0),
+		Available:         asInt64Default(status["available"], 0),
+		Allocated:         asInt64Default(status["allocated"], 0),
+		Stopped:           asInt64Default(status["stopped"], 0),
+		Provisioning:      asInt64Default(status["provisioning"], 0),
+		Failed:            asInt64Default(status["failed"], 0),
+		Replicas:          replicas,
+		MinReady:          minReady,
+		RecyclePolicy:     recycle,
+		CreateConnections: createConns,
+		PowerManagement: poolPowerManagementView{
+			Enabled:     enabled,
+			IdleSeconds: idleSeconds,
+		},
+	}
+	if desktops, ok := status["desktops"].([]interface{}); ok {
+		for _, d := range desktops {
+			m, ok := d.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			resp.Desktops = append(resp.Desktops, poolDesktopView{
+				Name:    asString(m["name"]),
+				State:   asString(m["state"]),
+				Message: asString(m["message"]),
+			})
+		}
+	}
+	return resp, nil
+}
+
+func updatePoolConfig(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespace, name string,
+	req poolConfigUpdate,
+) error {
+	if req.Replicas == nil && req.MinReady == nil && req.RecyclePolicy == "" &&
+		req.CreateConnections == nil && req.PowerManagement == nil {
+		return fmt.Errorf("no configuration fields provided")
+	}
+	if req.Replicas != nil && *req.Replicas < 0 {
+		return fmt.Errorf("replicas must be >= 0")
+	}
+	if req.MinReady != nil && *req.MinReady < 0 {
+		return fmt.Errorf("minReady must be >= 0")
+	}
+	if req.RecyclePolicy != "" && req.RecyclePolicy != "Delete" && req.RecyclePolicy != "Retain" {
+		return fmt.Errorf("recyclePolicy must be Delete or Retain")
+	}
+	if req.PowerManagement != nil && req.PowerManagement.IdleSeconds != nil && *req.PowerManagement.IdleSeconds < 0 {
+		return fmt.Errorf("powerManagement.idleSeconds must be >= 0")
+	}
+
+	specPatch := map[string]interface{}{}
+	if req.Replicas != nil {
+		specPatch["replicas"] = *req.Replicas
+	}
+	if req.MinReady != nil {
+		specPatch["minReady"] = *req.MinReady
+	}
+	if req.RecyclePolicy != "" {
+		specPatch["recyclePolicy"] = req.RecyclePolicy
+	}
+	if req.CreateConnections != nil {
+		specPatch["createConnections"] = *req.CreateConnections
+	}
+	if req.PowerManagement != nil {
+		pm := map[string]interface{}{}
+		if req.PowerManagement.Enabled != nil {
+			pm["enabled"] = *req.PowerManagement.Enabled
+		}
+		if req.PowerManagement.IdleSeconds != nil {
+			pm["idleSeconds"] = *req.PowerManagement.IdleSeconds
+		}
+		if len(pm) == 0 {
+			// Explicit empty object still enables the powerManagement block with CRD defaults.
+			pm["enabled"] = true
+		}
+		specPatch["powerManagement"] = pm
+	}
+	body, err := json.Marshal(map[string]interface{}{"spec": specPatch})
+	if err != nil {
+		return err
+	}
+	_, err = dyn.Resource(gvr).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, body, metav1.PatchOptions{},
+	)
+	return err
+}
+
+func resolveGuacamoleRef(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	poolsGVR schema.GroupVersionResource,
+	poolNamespace, poolName string,
+) (namespace, name string, err error) {
+	pool, err := dyn.Resource(poolsGVR).Namespace(poolNamespace).Get(ctx, poolName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	name, _, _ = unstructured.NestedString(pool.Object, "spec", "guacamole", "instanceRef", "name")
+	if name == "" {
+		return "", "", fmt.Errorf("pool %s/%s has no spec.guacamole.instanceRef.name", poolNamespace, poolName)
+	}
+	namespace, _, _ = unstructured.NestedString(pool.Object, "spec", "guacamole", "instanceRef", "namespace")
+	if namespace == "" {
+		namespace = pool.GetNamespace()
+	}
+	return namespace, name, nil
+}
+
+func getGuacamoleStatus(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	poolsGVR, guacamolesGVR schema.GroupVersionResource,
+	poolNamespace, poolName string,
+) (*guacamoleStatusResponse, error) {
+	ns, name, err := resolveGuacamoleRef(ctx, dyn, poolsGVR, poolNamespace, poolName)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := dyn.Resource(guacamolesGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	status, _, _ := unstructured.NestedMap(obj.Object, "status")
+	spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
+
+	replicas := int32(1)
+	if v, ok := asInt64(spec["replicas"]); ok {
+		replicas = int32(v)
+	}
+	guacdReplicas := int32(1)
+	if v, ok := asInt64(spec["guacdReplicas"]); ok {
+		guacdReplicas = int32(v)
+	}
+	logLevel := asString(spec["logLevel"])
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	routeEnabled := true
+	if route, ok := spec["route"].(map[string]interface{}); ok {
+		if v, ok := route["enabled"].(bool); ok {
+			routeEnabled = v
+		}
+	}
+
+	openid := guacamoleOpenIDView{}
+	if oidc, ok := spec["openID"].(map[string]interface{}); ok {
+		openid.Configured = true
+		openid.Enabled = true
+		if v, ok := oidc["enabled"].(bool); ok {
+			openid.Enabled = v
+		}
+		openid.Issuer = asString(oidc["issuer"])
+		openid.ClientID = asString(oidc["clientID"])
+		openid.UsernameClaimType = asString(oidc["usernameClaimType"])
+		if openid.UsernameClaimType == "" {
+			openid.UsernameClaimType = "preferred_username"
+		}
+		openid.Scope = asString(oidc["scope"])
+		if openid.Scope == "" {
+			openid.Scope = "openid email profile"
+		}
+		openid.ExtensionPriority = asString(oidc["extensionPriority"])
+		if openid.ExtensionPriority == "" {
+			openid.ExtensionPriority = "*,openid"
+		}
+		openid.RedirectURI = asString(oidc["redirectURI"])
+	}
+
+	return &guacamoleStatusResponse{
+		Name:          obj.GetName(),
+		Namespace:     obj.GetNamespace(),
+		Phase:         asString(status["phase"]),
+		RouteURL:      asString(status["routeURL"]),
+		Replicas:      replicas,
+		GuacdReplicas: guacdReplicas,
+		LogLevel:      logLevel,
+		RouteEnabled:  routeEnabled,
+		OpenID:        openid,
+	}, nil
+}
+
+func updateGuacamoleConfig(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	poolsGVR, guacamolesGVR schema.GroupVersionResource,
+	poolNamespace, poolName string,
+	req guacamoleConfigUpdate,
+) error {
+	if req.Replicas == nil && req.GuacdReplicas == nil && req.LogLevel == "" &&
+		req.RouteEnabled == nil && req.OpenID == nil {
+		return fmt.Errorf("no configuration fields provided")
+	}
+	if req.Replicas != nil && *req.Replicas < 1 {
+		return fmt.Errorf("replicas must be >= 1")
+	}
+	if req.GuacdReplicas != nil && *req.GuacdReplicas < 1 {
+		return fmt.Errorf("guacdReplicas must be >= 1")
+	}
+	if req.LogLevel != "" {
+		switch req.LogLevel {
+		case "debug", "info", "warn", "error":
+		default:
+			return fmt.Errorf("logLevel must be one of debug, info, warn, error")
+		}
+	}
+	if req.OpenID != nil && req.OpenID.ExtensionPriority != "" {
+		switch req.OpenID.ExtensionPriority {
+		case "*,openid", "openid", "openid,*":
+		default:
+			// Allow custom priorities; Guacamole accepts free-form lists.
+		}
+	}
+
+	ns, name, err := resolveGuacamoleRef(ctx, dyn, poolsGVR, poolNamespace, poolName)
+	if err != nil {
+		return err
+	}
+
+	specPatch := map[string]interface{}{}
+	if req.Replicas != nil {
+		specPatch["replicas"] = *req.Replicas
+	}
+	if req.GuacdReplicas != nil {
+		specPatch["guacdReplicas"] = *req.GuacdReplicas
+	}
+	if req.LogLevel != "" {
+		specPatch["logLevel"] = req.LogLevel
+	}
+	if req.RouteEnabled != nil {
+		specPatch["route"] = map[string]interface{}{"enabled": *req.RouteEnabled}
+	}
+	if req.OpenID != nil {
+		// Merge onto existing openID so we do not wipe issuer/clientID.
+		obj, err := dyn.Resource(guacamolesGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		existing, _, _ := unstructured.NestedMap(obj.Object, "spec", "openID")
+		if existing == nil {
+			return fmt.Errorf("openID is not configured on Guacamole %s/%s; set it on the CR first", ns, name)
+		}
+		if req.OpenID.Enabled != nil {
+			existing["enabled"] = *req.OpenID.Enabled
+		}
+		if req.OpenID.UsernameClaimType != "" {
+			existing["usernameClaimType"] = req.OpenID.UsernameClaimType
+		}
+		if req.OpenID.Scope != "" {
+			existing["scope"] = req.OpenID.Scope
+		}
+		if req.OpenID.ExtensionPriority != "" {
+			existing["extensionPriority"] = req.OpenID.ExtensionPriority
+		}
+		specPatch["openID"] = existing
+	}
+
+	body, err := json.Marshal(map[string]interface{}{"spec": specPatch})
+	if err != nil {
+		return err
+	}
+	_, err = dyn.Resource(guacamolesGVR).Namespace(ns).Patch(
+		ctx, name, types.MergePatchType, body, metav1.PatchOptions{},
+	)
+	return err
+}
+
+func setPoolPowerRequest(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespace, name, action string,
+) error {
+	patch := []byte(fmt.Sprintf(
+		`{"metadata":{"annotations":{"desktop.guacamole.io/power-request":%q}}}`,
+		action,
+	))
+	_, err := dyn.Resource(gvr).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{},
+	)
+	return err
+}
+
+func asString(v interface{}) string {
+	s, _ := v.(string)
+	return s
+}
+
+func asInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int32:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
+func asInt64Default(v interface{}, def int64) int64 {
+	if n, ok := asInt64(v); ok {
+		return n
+	}
+	return def
+}
+
 func createDesktopSession(
 	ctx context.Context,
 	dyn dynamic.Interface,
@@ -484,7 +1012,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

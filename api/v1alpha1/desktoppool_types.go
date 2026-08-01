@@ -40,9 +40,19 @@ const (
 	DesktopStateAvailable    DesktopState = "Available"
 	DesktopStateAllocated    DesktopState = "Allocated"
 	DesktopStateInUse        DesktopState = "InUse"
+	DesktopStateStopped      DesktopState = "Stopped"
 	DesktopStateReleasing    DesktopState = "Releasing"
 	DesktopStateDeleting     DesktopState = "Deleting"
 	DesktopStateFailed       DesktopState = "Failed"
+)
+
+// Annotations used for desktop power management.
+const (
+	DesktopAnnotationAvailableSince = "desktop.guacamole.io/available-since"
+	DesktopAnnotationPowerRequest   = "desktop.guacamole.io/power-request"
+
+	DesktopPowerRequestWake    = "wake"
+	DesktopPowerRequestSuspend = "suspend"
 )
 
 // DesktopPoolSpec defines the desired state of a desktop VM pool.
@@ -94,6 +104,26 @@ type DesktopPoolSpec struct {
 	// Set to false when DesktopSession owns connection creation.
 	// +kubebuilder:default=true
 	CreateConnections *bool `json:"createConnections,omitempty"`
+
+	// PowerManagement controls idle stop / wake-on-demand for pooled desktops.
+	// +optional
+	PowerManagement *DesktopPoolPowerManagementSpec `json:"powerManagement,omitempty"`
+}
+
+// DesktopPoolPowerManagementSpec configures idle stop and wake-on-demand.
+type DesktopPoolPowerManagementSpec struct {
+	// Enabled turns idle stop and wake-on-demand on.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// IdleSeconds is how long an Available desktop may sit unused before it is
+	// stopped (KubeVirt runStrategy Halted). Default is 900 (15 minutes).
+	// Zero stops Available desktops on the next reconcile (still respecting minReady).
+	// +kubebuilder:default=900
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	IdleSeconds *int64 `json:"idleSeconds,omitempty"`
 }
 
 // DesktopPoolSourceSpec references the golden image DataSource.
@@ -192,10 +222,10 @@ type DesktopPoolGuacamoleSpec struct {
 type DesktopPoolPhase string
 
 const (
-	DesktopPoolPhasePending DesktopPoolPhase = "Pending"
-	DesktopPoolPhaseReady   DesktopPoolPhase = "Ready"
-	DesktopPoolPhaseScaling DesktopPoolPhase = "Scaling"
-	DesktopPoolPhaseFailed  DesktopPoolPhase = "Failed"
+	DesktopPoolPhasePending  DesktopPoolPhase = "Pending"
+	DesktopPoolPhaseReady    DesktopPoolPhase = "Ready"
+	DesktopPoolPhaseScaling  DesktopPoolPhase = "Scaling"
+	DesktopPoolPhaseFailed   DesktopPoolPhase = "Failed"
 	DesktopPoolPhaseDeleting DesktopPoolPhase = "Deleting"
 )
 
@@ -237,6 +267,9 @@ type DesktopPoolStatus struct {
 	// Allocated is the number of desktops reserved by a session.
 	Allocated int32 `json:"allocated,omitempty"`
 
+	// Stopped is the number of desktops powered off by power management.
+	Stopped int32 `json:"stopped,omitempty"`
+
 	// Failed is the number of desktops in Failed state.
 	Failed int32 `json:"failed,omitempty"`
 
@@ -264,6 +297,7 @@ type DesktopPoolStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.status.desired`
 // +kubebuilder:printcolumn:name="Available",type=integer,JSONPath=`.status.available`
+// +kubebuilder:printcolumn:name="Stopped",type=integer,JSONPath=`.status.stopped`
 // +kubebuilder:printcolumn:name="Allocated",type=integer,JSONPath=`.status.allocated`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

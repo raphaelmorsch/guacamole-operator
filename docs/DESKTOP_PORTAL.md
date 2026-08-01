@@ -5,6 +5,12 @@ The `DesktopPortal` CR deploys an OpenShift Console dynamic plugin and a small A
 1. Lists users from a Keycloak realm (Admin API + `client_credentials`)
 2. Creates `DesktopSession` objects for one or more selected users against a `DesktopPool` (batch create via `POST /sessions/batch`)
 3. Deletes existing sessions in batch (`POST /sessions/batch-delete`)
+4. Shows DesktopPool status (`GET /pool`), updates pool config (`PUT /pool`), and can request wake/suspend (`POST /pool/wake`, `POST /pool/suspend`)
+5. Shows/updates the Guacamole instance linked by the pool (`GET/PUT /guacamole`)
+
+Editable pool fields: `replicas`, `minReady`, `recyclePolicy`, `createConnections`, `powerManagement.enabled`, `powerManagement.idleSeconds`.
+
+Editable Guacamole fields: `replicas`, `guacdReplicas`, `logLevel`, `route.enabled`, and when OpenID is already configured — `openID.enabled`, `usernameClaimType`, `scope`, `extensionPriority`.
 
 ## Flow
 
