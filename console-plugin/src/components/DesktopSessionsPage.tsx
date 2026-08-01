@@ -1,9 +1,11 @@
 import * as React from 'react';
+import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import {
   Alert,
   AlertVariant,
   Bullseye,
   Button,
+  Checkbox,
   EmptyState,
   EmptyStateBody,
   Form,
@@ -37,36 +39,66 @@ type SessionItem = {
   status?: { phase?: string; desktopName?: string; connectionName?: string };
 };
 
-const proxyBase = (pluginName: string) =>
-  `/api/proxy/plugin/${pluginName}/portal-api`;
+type BatchResultItem = {
+  subject: string;
+  name?: string;
+  status: 'created' | 'exists' | 'error' | string;
+  error?: string;
+};
+
+type BatchResponse = {
+  results: BatchResultItem[];
+  created: number;
+  exists: number;
+  errors: number;
+};
+
+const proxyBase = (pluginName: string) => `/api/proxy/plugin/${pluginName}/portal-api`;
 
 const DesktopSessionsPage: React.FC = () => {
   const [config, setConfig] = React.useState<PortalConfig | null>(null);
   const [search, setSearch] = React.useState('');
   const [users, setUsers] = React.useState<KeycloakUser[]>([]);
-  const [selected, setSelected] = React.useState('');
+  const [selected, setSelected] = React.useState<Record<string, boolean>>({});
   const [sessions, setSessions] = React.useState<SessionItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
 
+  const existingSubjects = React.useMemo(() => {
+    const set = new Set<string>();
+    sessions.forEach((s) => {
+      const subject = s.spec?.requester?.subject;
+      if (subject) set.add(subject);
+    });
+    return set;
+  }, [sessions]);
+
+  const selectedUsernames = React.useMemo(
+    () => Object.keys(selected).filter((u) => selected[u]),
+    [selected],
+  );
+
+  const selectableUsers = React.useMemo(
+    () => users.filter((u) => u.enabled && !existingSubjects.has(u.username)),
+    [users, existingSubjects],
+  );
+
   const load = React.useCallback(async () => {
     setError(null);
     try {
-      // Plugin name is fixed in ConsolePlugin CR.
       const pluginName = 'guacamole-desktop-portal';
       const base = proxyBase(pluginName);
-      const cfgRes = await fetch(`${base}/config`);
-      if (!cfgRes.ok) {
-        throw new Error(`config: ${cfgRes.status} ${await cfgRes.text()}`);
-      }
-      const cfg = (await cfgRes.json()) as PortalConfig;
+      // consoleFetchJSON attaches OpenShift CSRF headers required by the console proxy.
+      const cfg = (await consoleFetchJSON(`${base}/config`)) as PortalConfig;
       setConfig(cfg);
 
-      const sessRes = await fetch(`${base}/sessions`);
-      if (sessRes.ok) {
-        setSessions((await sessRes.json()) as SessionItem[]);
+      try {
+        const items = (await consoleFetchJSON(`${base}/sessions`)) as SessionItem[];
+        setSessions(items || []);
+      } catch {
+        setSessions([]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -86,11 +118,9 @@ const DesktopSessionsPage: React.FC = () => {
     try {
       const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
       const qs = search ? `?search=${encodeURIComponent(search)}` : '';
-      const res = await fetch(`${base}/users${qs}`);
-      if (!res.ok) {
-        throw new Error(`users: ${res.status} ${await res.text()}`);
-      }
-      setUsers((await res.json()) as KeycloakUser[]);
+      const items = (await consoleFetchJSON(`${base}/users${qs}`)) as KeycloakUser[];
+      setUsers(items || []);
+      setSelected({});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -98,23 +128,62 @@ const DesktopSessionsPage: React.FC = () => {
     }
   };
 
-  const createSession = async () => {
-    if (!config || !selected) return;
+  const toggleUser = (username: string, checked: boolean) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (checked) {
+        next[username] = true;
+      } else {
+        delete next[username];
+      }
+      return next;
+    });
+  };
+
+  const selectAllVisible = (checked: boolean) => {
+    if (!checked) {
+      setSelected({});
+      return;
+    }
+    const next: Record<string, boolean> = {};
+    selectableUsers.forEach((u) => {
+      next[u.username] = true;
+    });
+    setSelected(next);
+  };
+
+  const createSessions = async () => {
+    if (!config || selectedUsernames.length === 0) return;
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
       const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
-      const res = await fetch(`${base}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: selected, poolName: config.poolName }),
-      });
-      if (!res.ok) {
-        throw new Error(`create session: ${res.status} ${await res.text()}`);
+      const resp = (await consoleFetchJSON.post(`${base}/sessions/batch`, {
+        subjects: selectedUsernames,
+        poolName: config.poolName,
+      })) as BatchResponse;
+
+      const parts: string[] = [];
+      if (resp.created) parts.push(`${resp.created} created`);
+      if (resp.exists) parts.push(`${resp.exists} already existed`);
+      if (resp.errors) parts.push(`${resp.errors} failed`);
+      setMessage(
+        parts.length
+          ? `Batch result: ${parts.join(', ')}.`
+          : 'Batch completed with no changes.',
+      );
+
+      const failed = (resp.results || []).filter((r) => r.status === 'error');
+      if (failed.length) {
+        setError(
+          failed
+            .map((r) => `${r.subject}: ${r.error || 'unknown error'}`)
+            .join('; '),
+        );
       }
-      const created = await res.json();
-      setMessage(`DesktopSession ${created?.metadata?.name || ''} created for ${selected}`);
+
+      setSelected({});
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -133,13 +202,16 @@ const DesktopSessionsPage: React.FC = () => {
     );
   }
 
+  const allSelectableChecked =
+    selectableUsers.length > 0 && selectedUsernames.length === selectableUsers.length;
+
   return (
     <>
       <PageSection>
         <Title headingLevel="h1">{config?.displayName || 'Desktop Sessions'}</Title>
         <p>
-          Allocate a desktop from pool <strong>{config?.poolName}</strong> in namespace{' '}
-          <strong>{config?.sessionNamespace}</strong> for a Keycloak user.
+          Allocate desktops from pool <strong>{config?.poolName}</strong> in namespace{' '}
+          <strong>{config?.sessionNamespace}</strong> for one or more Keycloak users.
         </p>
       </PageSection>
       <PageSection>
@@ -159,7 +231,7 @@ const DesktopSessionsPage: React.FC = () => {
             void searchUsers();
           }}
         >
-          <FormGroup label="Find Keycloak user" fieldId="user-search">
+          <FormGroup label="Find Keycloak users" fieldId="user-search">
             <div style={{ display: 'flex', gap: 8 }}>
               <TextInput
                 id="user-search"
@@ -172,24 +244,66 @@ const DesktopSessionsPage: React.FC = () => {
               </Button>
             </div>
           </FormGroup>
-          <FormGroup label="User" fieldId="user-select">
-            <select
-              id="user-select"
-              value={selected}
-              onChange={(e) => setSelected(e.target.value)}
-              style={{ minWidth: 320, padding: 8 }}
-            >
-              <option value="">Select a user…</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.username} disabled={!u.enabled}>
-                  {u.username}
-                  {u.email ? ` <${u.email}>` : ''}
-                </option>
-              ))}
-            </select>
+
+          <FormGroup label="Users" fieldId="user-multi-select">
+            {users.length === 0 ? (
+              <EmptyState>
+                <EmptyStateBody>Search Keycloak to list users for batch allocation.</EmptyStateBody>
+              </EmptyState>
+            ) : (
+              <div
+                id="user-multi-select"
+                style={{
+                  border: '1px solid var(--pf-v5-global--BorderColor--100, #d2d2d2)',
+                  borderRadius: 4,
+                  padding: 12,
+                  maxHeight: 320,
+                  overflow: 'auto',
+                }}
+              >
+                <div style={{ marginBottom: 8 }}>
+                  <Checkbox
+                    id="select-all-users"
+                    label={`Select all available (${selectableUsers.length})`}
+                    isChecked={allSelectableChecked}
+                    isDisabled={selectableUsers.length === 0 || busy}
+                    onChange={(_event, checked) => selectAllVisible(checked)}
+                  />
+                </div>
+                {users.map((u) => {
+                  const hasSession = existingSubjects.has(u.username);
+                  const disabled = !u.enabled || hasSession || busy;
+                  const label = [
+                    u.username,
+                    u.email ? `<${u.email}>` : '',
+                    !u.enabled ? '(disabled)' : '',
+                    hasSession ? '(session exists)' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ');
+                  return (
+                    <div key={u.id} style={{ marginBottom: 4 }}>
+                      <Checkbox
+                        id={`user-${u.id}`}
+                        label={label}
+                        isChecked={!!selected[u.username]}
+                        isDisabled={disabled}
+                        onChange={(_event, checked) => toggleUser(u.username, checked)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </FormGroup>
-          <Button variant="primary" onClick={() => void createSession()} isDisabled={!selected || busy}>
-            Create Desktop Session
+
+          <Button
+            variant="primary"
+            onClick={() => void createSessions()}
+            isDisabled={selectedUsernames.length === 0 || busy}
+          >
+            Create Desktop Sessions
+            {selectedUsernames.length > 0 ? ` (${selectedUsernames.length})` : ''}
           </Button>
         </Form>
       </PageSection>

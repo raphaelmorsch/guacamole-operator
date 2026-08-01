@@ -21,8 +21,10 @@ spec:
       name: guacamole
       namespace: guacamole
     username: Administrator
+    # Must match windows-install-credentials in the golden-image namespace.
     password: "ChangeMe!"
-    security: nla
+    # Golden image disables NLA; "any"/"rdp" avoids Guacamole auth failures.
+    security: any
     ignoreCert: true
   recyclePolicy: Delete
   # false = GuacamoleConnection only when a DesktopSession allocates a VM

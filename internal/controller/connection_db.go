@@ -2,7 +2,10 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -554,14 +557,7 @@ func syncConnectionPermissions(
 	for _, permission := range permissions {
 		entityType := valueOrDefault(permission.EntityType, "USER")
 		perm := valueOrDefault(permission.Permission, "READ")
-		var entityID int64
-		err := tx.QueryRowContext(ctx,
-			"SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = ?",
-			permission.EntityName, entityType,
-		).Scan(&entityID)
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("guacamole entity %q (%s) not found", permission.EntityName, entityType)
-		}
+		entityID, err := ensureGuacamoleEntity(ctx, tx, permission.EntityName, entityType)
 		if err != nil {
 			return err
 		}
@@ -573,6 +569,87 @@ func syncConnectionPermissions(
 		}
 	}
 	return tx.Commit()
+}
+
+// ensureGuacamoleEntity returns the entity_id for name/type, creating the
+// Guacamole JDBC user (or user group) when missing. OpenID/SSO authenticates
+// identities that often do not yet exist in guacamole_entity; connection ACLs
+// still require that row.
+func ensureGuacamoleEntity(ctx context.Context, tx *sql.Tx, name, entityType string) (int64, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, fmt.Errorf("guacamole entity name is required")
+	}
+	entityType = valueOrDefault(entityType, "USER")
+
+	var entityID int64
+	err := tx.QueryRowContext(ctx,
+		"SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = ?",
+		name, entityType,
+	).Scan(&entityID)
+	if err == nil {
+		return entityID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	res, err := tx.ExecContext(ctx,
+		"INSERT INTO guacamole_entity (name, type) VALUES (?, ?)",
+		name, entityType,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create guacamole entity %q (%s): %w", name, entityType, err)
+	}
+	entityID, err = res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	switch entityType {
+	case "USER":
+		if err := insertGuacamoleUser(ctx, tx, entityID); err != nil {
+			return 0, err
+		}
+	case "USER_GROUP":
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO guacamole_user_group (entity_id) VALUES (?)",
+			entityID,
+		); err != nil {
+			return 0, fmt.Errorf("create guacamole user group %q: %w", name, err)
+		}
+	default:
+		return 0, fmt.Errorf("unsupported guacamole entity type %q", entityType)
+	}
+	return entityID, nil
+}
+
+func insertGuacamoleUser(ctx context.Context, tx *sql.Tx, entityID int64) error {
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("generate password salt: %w", err)
+	}
+	// Random local password: SSO users authenticate via OpenID, not this hash.
+	password := make([]byte, 32)
+	if _, err := rand.Read(password); err != nil {
+		return fmt.Errorf("generate password: %w", err)
+	}
+	hash := guacamolePasswordHash(hex.EncodeToString(password), salt)
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO guacamole_user (entity_id, password_hash, password_salt, password_date)
+VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+		entityID, hash, salt,
+	)
+	if err != nil {
+		return fmt.Errorf("create guacamole user row: %w", err)
+	}
+	return nil
+}
+
+// guacamolePasswordHash matches Guacamole JDBC: SHA-256(password + uppercase hex(salt)).
+func guacamolePasswordHash(password string, salt []byte) []byte {
+	sum := sha256.Sum256([]byte(password + strings.ToUpper(hex.EncodeToString(salt))))
+	return sum[:]
 }
 
 func deleteConnection(ctx context.Context, db *sql.DB, connectionID int64) error {

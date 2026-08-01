@@ -61,6 +61,19 @@ type createSessionRequest struct {
 	SessionName string `json:"sessionName,omitempty"`
 }
 
+type createBatchSessionRequest struct {
+	Subjects []string `json:"subjects"`
+	PoolName string   `json:"poolName,omitempty"`
+}
+
+type batchSessionResult struct {
+	Subject string                 `json:"subject"`
+	Name    string                 `json:"name,omitempty"`
+	Status  string                 `json:"status"` // created | exists | error
+	Error   string                 `json:"error,omitempty"`
+	Object  map[string]interface{} `json:"object,omitempty"`
+}
+
 type tokenCache struct {
 	mu        sync.Mutex
 	token     string
@@ -131,6 +144,55 @@ func main() {
 		}
 		writeJSON(w, users)
 	})
+	mux.HandleFunc("/sessions/batch", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req createBatchSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		subjects := uniqueSubjects(req.Subjects)
+		if len(subjects) == 0 {
+			http.Error(w, "subjects is required", http.StatusBadRequest)
+			return
+		}
+		poolName := req.PoolName
+		if poolName == "" {
+			poolName = cfg.PoolName
+		}
+		results := make([]batchSessionResult, 0, len(subjects))
+		for _, subject := range subjects {
+			created, name, err := createDesktopSession(r.Context(), dyn, sessionsGVR, cfg.SessionNamespace, poolName, subject, "")
+			if err != nil {
+				status := "error"
+				if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+					status = "exists"
+				}
+				results = append(results, batchSessionResult{
+					Subject: subject,
+					Name:    name,
+					Status:  status,
+					Error:   err.Error(),
+				})
+				continue
+			}
+			results = append(results, batchSessionResult{
+				Subject: subject,
+				Name:    name,
+				Status:  "created",
+				Object:  created.Object,
+			})
+		}
+		writeJSON(w, map[string]interface{}{
+			"results": results,
+			"created": countBatchStatus(results, "created"),
+			"exists":  countBatchStatus(results, "exists"),
+			"errors":  countBatchStatus(results, "error"),
+		})
+	})
 	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -155,33 +217,7 @@ func main() {
 			if poolName == "" {
 				poolName = cfg.PoolName
 			}
-			name := req.SessionName
-			if name == "" {
-				name = sanitizeName(fmt.Sprintf("desktop-session-%s", req.Subject))
-			}
-			obj := &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"apiVersion": "guacamole.guacamole.io/v1alpha1",
-					"kind":       "DesktopSession",
-					"metadata": map[string]interface{}{
-						"name":      name,
-						"namespace": cfg.SessionNamespace,
-						"labels": map[string]interface{}{
-							"desktop.guacamole.io/managed-by": "desktop-portal",
-							"desktop.guacamole.io/requester":  sanitizeLabel(req.Subject),
-						},
-					},
-					"spec": map[string]interface{}{
-						"poolRef": map[string]interface{}{
-							"name": poolName,
-						},
-						"requester": map[string]interface{}{
-							"subject": req.Subject,
-						},
-					},
-				},
-			}
-			created, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Create(r.Context(), obj, metav1.CreateOptions{})
+			created, _, err := createDesktopSession(r.Context(), dyn, sessionsGVR, cfg.SessionNamespace, poolName, req.Subject, req.SessionName)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
 				return
@@ -214,9 +250,107 @@ func main() {
 	_ = types.NamespacedName{}
 
 	log.Printf("desktop portal API listening on %s (namespace=%s pool=%s)", addr, cfg.SessionNamespace, cfg.PoolName)
-	if err := http.ListenAndServe(addr, withCORS(mux)); err != nil {
-		log.Fatal(err)
+
+	tlsAddr := os.Getenv("TLS_LISTEN_ADDR")
+	certFile := os.Getenv("TLS_CERT_FILE")
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	handler := withCORS(mux)
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- http.ListenAndServe(addr, handler)
+	}()
+	if tlsAddr != "" && certFile != "" && keyFile != "" {
+		go func() {
+			// Wait briefly for OpenShift serving-cert secret to be mounted.
+			deadline := time.Now().Add(2 * time.Minute)
+			for {
+				if _, err := os.Stat(certFile); err == nil {
+					if _, err := os.Stat(keyFile); err == nil {
+						break
+					}
+				}
+				if time.Now().After(deadline) {
+					errCh <- fmt.Errorf("timed out waiting for TLS certs %s / %s", certFile, keyFile)
+					return
+				}
+				time.Sleep(2 * time.Second)
+			}
+			log.Printf("desktop portal API TLS listening on %s", tlsAddr)
+			errCh <- http.ListenAndServeTLS(tlsAddr, certFile, keyFile, handler)
+		}()
 	}
+	log.Fatal(<-errCh)
+}
+
+func createDesktopSession(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespace, poolName, subject, sessionName string,
+) (*unstructured.Unstructured, string, error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return nil, "", fmt.Errorf("subject is required")
+	}
+	name := strings.TrimSpace(sessionName)
+	if name == "" {
+		name = sanitizeName(fmt.Sprintf("desktop-session-%s", subject))
+	}
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "guacamole.guacamole.io/v1alpha1",
+			"kind":       "DesktopSession",
+			"metadata": map[string]interface{}{
+				"name":      name,
+				"namespace": namespace,
+				"labels": map[string]interface{}{
+					"desktop.guacamole.io/managed-by": "desktop-portal",
+					"desktop.guacamole.io/requester":  sanitizeLabel(subject),
+				},
+			},
+			"spec": map[string]interface{}{
+				"poolRef": map[string]interface{}{
+					"name": poolName,
+				},
+				"requester": map[string]interface{}{
+					"subject": subject,
+				},
+			},
+		},
+	}
+	created, err := dyn.Resource(gvr).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+	if err != nil {
+		return nil, name, err
+	}
+	return created, name, nil
+}
+
+func uniqueSubjects(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func countBatchStatus(results []batchSessionResult, status string) int {
+	n := 0
+	for _, r := range results {
+		if r.Status == status {
+			n++
+		}
+	}
+	return n
 }
 
 func listKeycloakUsers(

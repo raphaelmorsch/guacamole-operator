@@ -264,7 +264,7 @@ func (r *DesktopSessionReconciler) ensureSessionConnection(
 	}
 	security := pool.Spec.Guacamole.Security
 	if security == "" {
-		security = "nla"
+		security = "any"
 	}
 	username := pool.Spec.Guacamole.Username
 	if username == "" {

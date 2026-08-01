@@ -3,7 +3,7 @@
 The `DesktopPortal` CR deploys an OpenShift Console dynamic plugin and a small API that:
 
 1. Lists users from a Keycloak realm (Admin API + `client_credentials`)
-2. Creates `DesktopSession` objects for the selected user against a `DesktopPool`
+2. Creates `DesktopSession` objects for one or more selected users against a `DesktopPool` (batch create via `POST /sessions/batch`)
 
 ## Flow
 
@@ -36,10 +36,10 @@ Build and push:
 
 ```bash
 # portal API
-podman build -f Dockerfile.portal-api -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-api:0.0.15 .
+podman build -f Dockerfile.portal-api -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-api:0.0.21 .
 
 # console plugin
-podman build -f console-plugin/Dockerfile -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-plugin:0.0.15 console-plugin/
+podman build -f console-plugin/Dockerfile -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-plugin:0.0.21 console-plugin/
 ```
 
 Set `spec.pluginImage` / `spec.apiImage`, or inject `RELATED_IMAGE_DESKTOP_PORTAL_PLUGIN` and `RELATED_IMAGE_DESKTOP_PORTAL_API` on the operator Deployment.

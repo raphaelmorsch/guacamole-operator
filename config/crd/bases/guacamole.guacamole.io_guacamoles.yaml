@@ -264,6 +264,74 @@ spec:
                 default: mysql:8.0
                 description: MySQLImage is the container image for the MySQL database.
                 type: string
+              openID:
+                description: |-
+                  OpenID configures OpenID Connect SSO (e.g. Keycloak) for the Guacamole web UI.
+                  When set, the guacamole/guacamole container loads guacamole-auth-sso-openid
+                  alongside the MySQL JDBC extension.
+                properties:
+                  authorizationEndpoint:
+                    description: |-
+                      AuthorizationEndpoint is the OIDC authorization endpoint.
+                      Defaults to <issuer>/protocol/openid-connect/auth when unset.
+                    type: string
+                  clientID:
+                    description: ClientID is the OIDC client id registered in the
+                      identity provider.
+                    type: string
+                  clientSecretRef:
+                    description: |-
+                      ClientSecretRef optionally provides a confidential client secret.
+                      Not required for Guacamole's default OpenID implicit flow.
+                    properties:
+                      key:
+                        default: password
+                        description: Key within the secret.
+                        type: string
+                      name:
+                        description: Name of the secret.
+                        type: string
+                    type: object
+                  enabled:
+                    default: true
+                    description: |-
+                      Enabled activates the OpenID extension.
+                      Defaults to true when this object is present.
+                    type: boolean
+                  extensionPriority:
+                    default: '*,openid'
+                    description: |-
+                      ExtensionPriority controls login UX.
+                      "*,openid" keeps the Guacamole login form and adds an SSO option.
+                      "openid" redirects unauthenticated users straight to the IdP.
+                    type: string
+                  issuer:
+                    description: 'Issuer is the expected token issuer (Keycloak: https://.../realms/<realm>).'
+                    type: string
+                  jwksEndpoint:
+                    description: |-
+                      JWKSEndpoint is the JWKS URI used to validate ID tokens.
+                      Defaults to <issuer>/protocol/openid-connect/certs when unset.
+                    type: string
+                  redirectURI:
+                    description: |-
+                      RedirectURI is the full Guacamole URL returned to after IdP login.
+                      Defaults to status.routeURL when unset.
+                    type: string
+                  scope:
+                    default: openid email profile
+                    description: Scope is the space-separated OpenID scope list.
+                    type: string
+                  usernameClaimType:
+                    default: preferred_username
+                    description: |-
+                      UsernameClaimType is the JWT claim used as the Guacamole username.
+                      Use preferred_username when integrating with Keycloak users that match DesktopSession subjects.
+                    type: string
+                required:
+                - clientID
+                - issuer
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of Guacamole web application replicas.

@@ -560,7 +560,8 @@ func (r *DesktopPoolReconciler) ensureGuacamoleConnection(
 	}
 	security := pool.Spec.Guacamole.Security
 	if security == "" {
-		security = "nla"
+		// Golden images for this operator typically disable NLA for Guacamole compatibility.
+		security = "any"
 	}
 	username := pool.Spec.Guacamole.Username
 	if username == "" {

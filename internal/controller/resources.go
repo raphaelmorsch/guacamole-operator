@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -540,11 +541,14 @@ fi
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports:           []corev1.ContainerPort{{ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
 							Env: append(
-								guacamoleDBEnv(secretName, mysqlHost),
-								corev1.EnvVar{Name: "GUACAMOLE_HOME", Value: "/tmp"},
-								corev1.EnvVar{Name: "GUACD_HOSTNAME", Value: guacdHost},
-								corev1.EnvVar{Name: "GUACD_PORT", Value: "4822"},
-								corev1.EnvVar{Name: "LOG_LEVEL", Value: logLevel},
+								append(
+									guacamoleDBEnv(secretName, mysqlHost),
+									corev1.EnvVar{Name: "GUACAMOLE_HOME", Value: "/tmp"},
+									corev1.EnvVar{Name: "GUACD_HOSTNAME", Value: guacdHost},
+									corev1.EnvVar{Name: "GUACD_PORT", Value: "4822"},
+									corev1.EnvVar{Name: "LOG_LEVEL", Value: logLevel},
+								),
+								openIDEnv(g)...,
 							),
 							Resources: guacResources,
 							VolumeMounts: []corev1.VolumeMount{
@@ -557,6 +561,65 @@ fi
 		},
 	}
 	return deploy
+}
+
+func openIDEnv(g *guacamolev1alpha1.Guacamole) []corev1.EnvVar {
+	oidc := g.Spec.OpenID
+	if oidc == nil || (oidc.Enabled != nil && !*oidc.Enabled) {
+		return nil
+	}
+	if strings.TrimSpace(oidc.Issuer) == "" || strings.TrimSpace(oidc.ClientID) == "" {
+		return nil
+	}
+
+	issuer := strings.TrimRight(oidc.Issuer, "/")
+	authEndpoint := oidc.AuthorizationEndpoint
+	if authEndpoint == "" {
+		authEndpoint = issuer + "/protocol/openid-connect/auth"
+	}
+	jwksEndpoint := oidc.JWKSEndpoint
+	if jwksEndpoint == "" {
+		jwksEndpoint = issuer + "/protocol/openid-connect/certs"
+	}
+	redirect := oidc.RedirectURI
+	if redirect == "" {
+		redirect = g.Status.RouteURL
+	}
+	if redirect == "" {
+		// Route not ready yet; skip OpenID until redirect can be resolved.
+		return nil
+	}
+	usernameClaim := valueOrDefault(oidc.UsernameClaimType, "preferred_username")
+	scope := valueOrDefault(oidc.Scope, "openid email profile")
+	priority := valueOrDefault(oidc.ExtensionPriority, "*,openid")
+
+	env := []corev1.EnvVar{
+		{Name: "OPENID_ENABLED", Value: "true"},
+		{Name: "OPENID_AUTHORIZATION_ENDPOINT", Value: authEndpoint},
+		{Name: "OPENID_JWKS_ENDPOINT", Value: jwksEndpoint},
+		{Name: "OPENID_ISSUER", Value: issuer},
+		{Name: "OPENID_CLIENT_ID", Value: oidc.ClientID},
+		{Name: "OPENID_REDIRECT_URI", Value: redirect},
+		{Name: "OPENID_USERNAME_CLAIM_TYPE", Value: usernameClaim},
+		{Name: "OPENID_SCOPE", Value: scope},
+		{Name: "EXTENSION_PRIORITY", Value: priority},
+	}
+	if oidc.ClientSecretRef != nil && oidc.ClientSecretRef.Name != "" {
+		key := oidc.ClientSecretRef.Key
+		if key == "" {
+			key = "client-secret"
+		}
+		env = append(env, corev1.EnvVar{
+			Name: "OPENID_CLIENT_SECRET",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: oidc.ClientSecretRef.Name},
+					Key:                  key,
+				},
+			},
+		})
+	}
+	return env
 }
 
 func desiredGuacamoleService(g *guacamolev1alpha1.Guacamole) *corev1.Service {

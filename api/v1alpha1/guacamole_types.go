@@ -74,6 +74,66 @@ type GuacamoleSpec struct {
 	// The deployment is created when any GuacamoleConnection has spec.exposeMetrics enabled.
 	// +optional
 	MetricsExporter MetricsExporterSpec `json:"metricsExporter,omitempty"`
+
+	// OpenID configures OpenID Connect SSO (e.g. Keycloak) for the Guacamole web UI.
+	// When set, the guacamole/guacamole container loads guacamole-auth-sso-openid
+	// alongside the MySQL JDBC extension.
+	// +optional
+	OpenID *OpenIDSpec `json:"openID,omitempty"`
+}
+
+// OpenIDSpec configures Guacamole's OpenID Connect authentication extension.
+// See https://guacamole.apache.org/doc/gug/openid-auth.html
+type OpenIDSpec struct {
+	// Enabled activates the OpenID extension.
+	// Defaults to true when this object is present.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Issuer is the expected token issuer (Keycloak: https://.../realms/<realm>).
+	Issuer string `json:"issuer"`
+
+	// AuthorizationEndpoint is the OIDC authorization endpoint.
+	// Defaults to <issuer>/protocol/openid-connect/auth when unset.
+	// +optional
+	AuthorizationEndpoint string `json:"authorizationEndpoint,omitempty"`
+
+	// JWKSEndpoint is the JWKS URI used to validate ID tokens.
+	// Defaults to <issuer>/protocol/openid-connect/certs when unset.
+	// +optional
+	JWKSEndpoint string `json:"jwksEndpoint,omitempty"`
+
+	// ClientID is the OIDC client id registered in the identity provider.
+	ClientID string `json:"clientID"`
+
+	// ClientSecretRef optionally provides a confidential client secret.
+	// Not required for Guacamole's default OpenID implicit flow.
+	// +optional
+	ClientSecretRef *SecretKeyRef `json:"clientSecretRef,omitempty"`
+
+	// RedirectURI is the full Guacamole URL returned to after IdP login.
+	// Defaults to status.routeURL when unset.
+	// +optional
+	RedirectURI string `json:"redirectURI,omitempty"`
+
+	// UsernameClaimType is the JWT claim used as the Guacamole username.
+	// Use preferred_username when integrating with Keycloak users that match DesktopSession subjects.
+	// +kubebuilder:default="preferred_username"
+	// +optional
+	UsernameClaimType string `json:"usernameClaimType,omitempty"`
+
+	// Scope is the space-separated OpenID scope list.
+	// +kubebuilder:default="openid email profile"
+	// +optional
+	Scope string `json:"scope,omitempty"`
+
+	// ExtensionPriority controls login UX.
+	// "*,openid" keeps the Guacamole login form and adds an SSO option.
+	// "openid" redirects unauthenticated users straight to the IdP.
+	// +kubebuilder:default="*,openid"
+	// +optional
+	ExtensionPriority string `json:"extensionPriority,omitempty"`
 }
 
 // MetricsExporterSpec configures the shared Prometheus exporter for a Guacamole instance.

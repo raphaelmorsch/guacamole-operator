@@ -33,3 +33,11 @@ spec:
   metricsExporter:
     port: 9110
     scrapeIntervalSeconds: 15
+  # Optional: Keycloak / OIDC SSO for the Guacamole web UI
+  # openID:
+  #   enabled: true
+  #   issuer: https://keycloak.apps.example.com/realms/guacamole
+  #   clientID: guacamole
+  #   redirectURI: https://guacamole.apps.example.com/guacamole
+  #   usernameClaimType: preferred_username
+  #   extensionPriority: "*,openid"

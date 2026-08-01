@@ -45,6 +45,7 @@ const (
 	desktopPortalFinalizer = "guacamole.guacamole.io/desktopportal-finalizer"
 	portalPluginName       = "guacamole-desktop-portal"
 	portalAPIPort          = 8080
+	portalAPIHTTPSPort     = 8443
 	portalPluginPort       = 9443
 )
 
@@ -343,12 +344,30 @@ func (r *DesktopPortalReconciler) ensureAPIDeployment(
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": names.APIDeployment}}
 		deploy.Spec.Template.ObjectMeta.Labels = map[string]string{"app": names.APIDeployment}
 		deploy.Spec.Template.Spec.ServiceAccountName = names.APIServiceAccount
+		deploy.Spec.Template.Spec.Volumes = []corev1.Volume{{
+			Name: "serving-cert",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: names.APIService + "-cert",
+					Optional:   ptr.To(true),
+				},
+			},
+		}}
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{{
 			Name:  "portal-api",
 			Image: image,
-			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: portalAPIPort}},
+			Ports: []corev1.ContainerPort{
+				{Name: "http", ContainerPort: portalAPIPort},
+				{Name: "https", ContainerPort: portalAPIHTTPSPort},
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "serving-cert", MountPath: "/var/serving-cert"},
+			},
 			Env: []corev1.EnvVar{
 				{Name: "LISTEN_ADDR", Value: fmt.Sprintf(":%d", portalAPIPort)},
+				{Name: "TLS_LISTEN_ADDR", Value: fmt.Sprintf(":%d", portalAPIHTTPSPort)},
+				{Name: "TLS_CERT_FILE", Value: "/var/serving-cert/tls.crt"},
+				{Name: "TLS_KEY_FILE", Value: "/var/serving-cert/tls.key"},
 				{Name: "DISPLAY_NAME", Value: display},
 				{Name: "SESSION_NAMESPACE", Value: sessionNS},
 				{Name: "POOL_NAME", Value: portal.Spec.DefaultPool.Name},
@@ -368,14 +387,16 @@ func (r *DesktopPortalReconciler) ensureAPIDeployment(
 			},
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-					Path: "/healthz",
-					Port: intstr.FromInt(portalAPIPort),
+					Path:   "/healthz",
+					Port:   intstr.FromInt(portalAPIHTTPSPort),
+					Scheme: corev1.URISchemeHTTPS,
 				}},
 			},
 			LivenessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-					Path: "/healthz",
-					Port: intstr.FromInt(portalAPIPort),
+					Path:   "/healthz",
+					Port:   intstr.FromInt(portalAPIHTTPSPort),
+					Scheme: corev1.URISchemeHTTPS,
 				}},
 			},
 		}}
@@ -390,11 +411,15 @@ func (r *DesktopPortalReconciler) ensureAPIService(ctx context.Context, portal *
 		if err := controllerutil.SetControllerReference(portal, svc, r.Scheme); err != nil {
 			return err
 		}
+		if svc.Annotations == nil {
+			svc.Annotations = map[string]string{}
+		}
+		svc.Annotations["service.beta.openshift.io/serving-cert-secret-name"] = names.APIService + "-cert"
 		svc.Spec.Selector = map[string]string{"app": names.APIDeployment}
 		svc.Spec.Ports = []corev1.ServicePort{{
-			Name:       "http",
-			Port:       portalAPIPort,
-			TargetPort: intstr.FromInt(portalAPIPort),
+			Name:       "https",
+			Port:       portalAPIHTTPSPort,
+			TargetPort: intstr.FromInt(portalAPIHTTPSPort),
 		}}
 		return nil
 	})
@@ -483,6 +508,7 @@ func (r *DesktopPortalReconciler) ensureConsolePlugin(ctx context.Context, porta
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cp, func() error {
 		_ = unstructured.SetNestedField(cp.Object, display, "spec", "displayName")
 		_ = unstructured.SetNestedMap(cp.Object, map[string]interface{}{
+			"type": "Service",
 			"service": map[string]interface{}{
 				"name":      names.PluginService,
 				"namespace": portal.Namespace,
@@ -492,16 +518,16 @@ func (r *DesktopPortalReconciler) ensureConsolePlugin(ctx context.Context, porta
 		}, "spec", "backend")
 		_ = unstructured.SetNestedSlice(cp.Object, []interface{}{
 			map[string]interface{}{
-				"alias": "portal-api",
+				"alias":         "portal-api",
+				"authorization": "UserToken",
 				"endpoint": map[string]interface{}{
 					"type": "Service",
 					"service": map[string]interface{}{
 						"name":      names.APIService,
 						"namespace": portal.Namespace,
-						"port":      int64(portalAPIPort),
+						"port":      int64(portalAPIHTTPSPort),
 					},
 				},
-				"authorize": true,
 			},
 		}, "spec", "proxy")
 		return nil
