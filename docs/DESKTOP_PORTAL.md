@@ -4,6 +4,7 @@ The `DesktopPortal` CR deploys an OpenShift Console dynamic plugin and a small A
 
 1. Lists users from a Keycloak realm (Admin API + `client_credentials`)
 2. Creates `DesktopSession` objects for one or more selected users against a `DesktopPool` (batch create via `POST /sessions/batch`)
+3. Deletes existing sessions in batch (`POST /sessions/batch-delete`)
 
 ## Flow
 

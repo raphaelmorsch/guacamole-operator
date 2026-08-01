@@ -66,10 +66,14 @@ type createBatchSessionRequest struct {
 	PoolName string   `json:"poolName,omitempty"`
 }
 
+type deleteBatchSessionRequest struct {
+	Names []string `json:"names"`
+}
+
 type batchSessionResult struct {
 	Subject string                 `json:"subject"`
 	Name    string                 `json:"name,omitempty"`
-	Status  string                 `json:"status"` // created | exists | error
+	Status  string                 `json:"status"` // created | exists | deleted | error
 	Error   string                 `json:"error,omitempty"`
 	Object  map[string]interface{} `json:"object,omitempty"`
 }
@@ -190,6 +194,43 @@ func main() {
 			"results": results,
 			"created": countBatchStatus(results, "created"),
 			"exists":  countBatchStatus(results, "exists"),
+			"errors":  countBatchStatus(results, "error"),
+		})
+	})
+	mux.HandleFunc("/sessions/batch-delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req deleteBatchSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		names := uniqueSubjects(req.Names)
+		if len(names) == 0 {
+			http.Error(w, "names is required", http.StatusBadRequest)
+			return
+		}
+		results := make([]batchSessionResult, 0, len(names))
+		for _, name := range names {
+			err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Delete(r.Context(), name, metav1.DeleteOptions{})
+			if err != nil {
+				results = append(results, batchSessionResult{
+					Name:   name,
+					Status: "error",
+					Error:  err.Error(),
+				})
+				continue
+			}
+			results = append(results, batchSessionResult{
+				Name:   name,
+				Status: "deleted",
+			})
+		}
+		writeJSON(w, map[string]interface{}{
+			"results": results,
+			"deleted": countBatchStatus(results, "deleted"),
 			"errors":  countBatchStatus(results, "error"),
 		})
 	})

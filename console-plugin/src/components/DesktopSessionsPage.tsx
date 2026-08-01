@@ -40,16 +40,17 @@ type SessionItem = {
 };
 
 type BatchResultItem = {
-  subject: string;
+  subject?: string;
   name?: string;
-  status: 'created' | 'exists' | 'error' | string;
+  status: 'created' | 'exists' | 'deleted' | 'error' | string;
   error?: string;
 };
 
 type BatchResponse = {
   results: BatchResultItem[];
-  created: number;
-  exists: number;
+  created?: number;
+  exists?: number;
+  deleted?: number;
   errors: number;
 };
 
@@ -60,6 +61,7 @@ const DesktopSessionsPage: React.FC = () => {
   const [search, setSearch] = React.useState('');
   const [users, setUsers] = React.useState<KeycloakUser[]>([]);
   const [selected, setSelected] = React.useState<Record<string, boolean>>({});
+  const [selectedSessions, setSelectedSessions] = React.useState<Record<string, boolean>>({});
   const [sessions, setSessions] = React.useState<SessionItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
@@ -80,6 +82,11 @@ const DesktopSessionsPage: React.FC = () => {
     [selected],
   );
 
+  const selectedSessionNames = React.useMemo(
+    () => Object.keys(selectedSessions).filter((n) => selectedSessions[n]),
+    [selectedSessions],
+  );
+
   const selectableUsers = React.useMemo(
     () => users.filter((u) => u.enabled && !existingSubjects.has(u.username)),
     [users, existingSubjects],
@@ -97,8 +104,10 @@ const DesktopSessionsPage: React.FC = () => {
       try {
         const items = (await consoleFetchJSON(`${base}/sessions`)) as SessionItem[];
         setSessions(items || []);
+        setSelectedSessions({});
       } catch {
         setSessions([]);
+        setSelectedSessions({});
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -184,6 +193,70 @@ const DesktopSessionsPage: React.FC = () => {
       }
 
       setSelected({});
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSession = (name: string, checked: boolean) => {
+    setSelectedSessions((prev) => {
+      const next = { ...prev };
+      if (checked) {
+        next[name] = true;
+      } else {
+        delete next[name];
+      }
+      return next;
+    });
+  };
+
+  const selectAllSessions = (checked: boolean) => {
+    if (!checked) {
+      setSelectedSessions({});
+      return;
+    }
+    const next: Record<string, boolean> = {};
+    sessions.forEach((s) => {
+      const name = s.metadata?.name;
+      if (name) next[name] = true;
+    });
+    setSelectedSessions(next);
+  };
+
+  const deleteSessions = async () => {
+    if (!config || selectedSessionNames.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${selectedSessionNames.length} DesktopSession(s)? Assigned desktops will be released according to the pool recycle policy.`,
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
+      const resp = (await consoleFetchJSON.post(`${base}/sessions/batch-delete`, {
+        names: selectedSessionNames,
+      })) as BatchResponse;
+
+      const parts: string[] = [];
+      if (resp.deleted) parts.push(`${resp.deleted} deleted`);
+      if (resp.errors) parts.push(`${resp.errors} failed`);
+      setMessage(parts.length ? `Delete result: ${parts.join(', ')}.` : 'Delete completed.');
+
+      const failed = (resp.results || []).filter((r) => r.status === 'error');
+      if (failed.length) {
+        setError(
+          failed
+            .map((r) => `${r.name || r.subject}: ${r.error || 'unknown error'}`)
+            .join('; '),
+        );
+      }
+
+      setSelectedSessions({});
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -314,26 +387,60 @@ const DesktopSessionsPage: React.FC = () => {
             <EmptyStateBody>No DesktopSessions in {config?.sessionNamespace}.</EmptyStateBody>
           </EmptyState>
         ) : (
-          <table className="pf-v5-c-table pf-m-compact" style={{ width: '100%', marginTop: 16 }}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Subject</th>
-                <th>Phase</th>
-                <th>Desktop</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((s) => (
-                <tr key={s.metadata?.name}>
-                  <td>{s.metadata?.name}</td>
-                  <td>{s.spec?.requester?.subject}</td>
-                  <td>{s.status?.phase || 'Pending'}</td>
-                  <td>{s.status?.desktopName || '—'}</td>
+          <>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, marginBottom: 8, alignItems: 'center' }}>
+              <Checkbox
+                id="select-all-sessions"
+                label={`Select all (${sessions.length})`}
+                isChecked={
+                  sessions.length > 0 && selectedSessionNames.length === sessions.length
+                }
+                isDisabled={busy}
+                onChange={(_event, checked) => selectAllSessions(checked)}
+              />
+              <Button
+                variant="danger"
+                onClick={() => void deleteSessions()}
+                isDisabled={selectedSessionNames.length === 0 || busy}
+              >
+                Delete selected
+                {selectedSessionNames.length > 0 ? ` (${selectedSessionNames.length})` : ''}
+              </Button>
+            </div>
+            <table className="pf-v5-c-table pf-m-compact" style={{ width: '100%' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }} />
+                  <th>Name</th>
+                  <th>Subject</th>
+                  <th>Phase</th>
+                  <th>Desktop</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sessions.map((s) => {
+                  const name = s.metadata?.name || '';
+                  return (
+                    <tr key={name}>
+                      <td>
+                        <Checkbox
+                          id={`session-${name}`}
+                          aria-label={`Select session ${name}`}
+                          isChecked={!!selectedSessions[name]}
+                          isDisabled={!name || busy}
+                          onChange={(_event, checked) => toggleSession(name, checked)}
+                        />
+                      </td>
+                      <td>{name}</td>
+                      <td>{s.spec?.requester?.subject}</td>
+                      <td>{s.status?.phase || 'Pending'}</td>
+                      <td>{s.status?.desktopName || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </>
         )}
         <div style={{ marginTop: 16 }}>
           <Button variant="secondary" onClick={() => void load()} isDisabled={busy}>
