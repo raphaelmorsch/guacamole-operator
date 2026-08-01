@@ -8,5 +8,9 @@ spec:
     name: windows-desktop
   requester:
     subject: usuario1
+  # Broker: higher priority is served first when the pool is full (default 0).
+  # priority: 10
+  # Fail if still queued after N seconds (omit to wait indefinitely).
+  # maxQueueSeconds: 900
   # Optional: auto-release after N seconds Ready
   # ttlSecondsAfterReady: 3600

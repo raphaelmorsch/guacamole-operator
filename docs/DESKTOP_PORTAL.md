@@ -31,6 +31,11 @@ Create a confidential client with a service account that can query users, for ex
 
 Store the client secret in a Kubernetes Secret referenced by `spec.keycloak.clientSecretRef`.
 
+Set `spec.keycloak.url` to the **in-cluster Service** (for example
+`http://keycloak-service.guacamole-desktops.svc:8080`), not the public Route.
+Pods calling the Route hostname often hit hairpin/NAT timeouts and the Console
+shows **Bad Gateway** on user search.
+
 ### Images
 
 Build and push:

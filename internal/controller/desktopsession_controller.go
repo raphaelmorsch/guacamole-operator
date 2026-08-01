@@ -31,7 +31,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	guacamolev1alpha1 "github.com/raphaelmorsch/guacamole-operator/api/v1alpha1"
 )
@@ -100,10 +102,12 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Already allocated: ensure connection + TTL.
 	if session.Status.DesktopName != "" &&
 		(session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseReady ||
-			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhasePending) {
+			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhasePending ||
+			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseQueued) {
 		if err := r.ensureSessionConnection(ctx, session, pool); err != nil {
 			logger.Error(err, "failed to ensure session GuacamoleConnection")
 			_ = r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+				clearBrokerQueueStatus(status)
 				status.Message = err.Error()
 				setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "ConnectionFailed", err.Error())
 			})
@@ -112,6 +116,7 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		now := metav1.Now()
 		if err := r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+			clearBrokerQueueStatus(status)
 			status.Phase = guacamolev1alpha1.DesktopSessionPhaseReady
 			status.ConnectionName = session.Name
 			status.ServiceDNS = rdpServiceDNS(session.Status.DesktopName, session.Namespace)
@@ -131,6 +136,7 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 			}
 			_ = r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+				clearBrokerQueueStatus(status)
 				status.Phase = guacamolev1alpha1.DesktopSessionPhaseReleased
 				status.Message = "released after TTL"
 				setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "TTLExpired", "session released after TTL")
@@ -142,19 +148,48 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
 	}
 
-	// Allocate a free desktop.
+	// Intelligent broker: fair queue (priority, then FIFO) before allocation.
+	waiters, err := r.listPoolWaiters(ctx, session.Namespace, pool.Name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	position, length := brokerQueuePosition(session, waiters)
+	now := metav1.Now()
+
+	if brokerQueueTimedOut(session, now.Time) {
+		msg := fmt.Sprintf("broker queue timeout after %d seconds (position %d/%d)",
+			*session.Spec.MaxQueueSeconds, position, length)
+		return r.failSession(ctx, session, msg)
+	}
+
+	if position == 0 {
+		// Should not happen for unallocated sessions, but keep status coherent.
+		position, length = 1, 1
+	}
+
+	if !isBrokerQueueHead(session, waiters) {
+		logger.Info("broker queued session", "position", position, "length", length, "pool", pool.Name)
+		_ = r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+			setBrokerQueueStatus(status, position, length, now)
+		})
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Head of queue: try to reserve the next Available desktop.
 	vmName, err := r.reserveAvailableDesktop(ctx, session, pool)
 	if err != nil {
-		logger.Info("waiting for available desktop", "error", err.Error())
+		waitMsg := r.brokerWaitingMessage(ctx, pool, err)
+		logger.Info("broker head waiting for available desktop", "error", waitMsg, "queueLength", length)
 		_ = r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
-			status.Phase = guacamolev1alpha1.DesktopSessionPhasePending
-			status.Message = err.Error()
-			setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "WaitingForDesktop", err.Error())
+			setBrokerQueueStatus(status, 1, length, now)
+			status.Message = waitMsg
+			setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "WaitingForDesktop", status.Message)
 		})
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	if err := r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+		clearBrokerQueueStatus(status)
 		status.DesktopName = vmName
 		status.ServiceDNS = rdpServiceDNS(vmName, session.Namespace)
 		status.Phase = guacamolev1alpha1.DesktopSessionPhasePending
@@ -165,6 +200,74 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	return ctrl.Result{Requeue: true}, nil
+}
+
+func (r *DesktopSessionReconciler) listPoolWaiters(
+	ctx context.Context,
+	namespace, poolName string,
+) ([]guacamolev1alpha1.DesktopSession, error) {
+	list := &guacamolev1alpha1.DesktopSessionList{}
+	if err := r.List(ctx, list, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	waiters := make([]guacamolev1alpha1.DesktopSession, 0, len(list.Items))
+	for i := range list.Items {
+		s := list.Items[i]
+		if s.Spec.PoolRef.Name != poolName {
+			continue
+		}
+		if !isWaitingForBroker(&s) {
+			continue
+		}
+		waiters = append(waiters, s)
+	}
+	return waiters, nil
+}
+
+func (r *DesktopSessionReconciler) brokerWaitingMessage(
+	ctx context.Context,
+	pool *guacamolev1alpha1.DesktopPool,
+	reserveErr error,
+) string {
+	booting, provisioning := 0, 0
+	for _, d := range pool.Status.Desktops {
+		switch d.State {
+		case guacamolev1alpha1.DesktopStateBooting:
+			booting++
+		case guacamolev1alpha1.DesktopStateProvisioning:
+			provisioning++
+		}
+	}
+	// Refresh from live VM labels when pool status is stale.
+	if booting+provisioning == 0 {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineList",
+		})
+		if err := r.List(ctx, list, client.InNamespace(pool.Namespace), client.MatchingLabels{
+			guacamolev1alpha1.DesktopLabelPool: pool.Name,
+		}); err == nil {
+			for i := range list.Items {
+				state := list.Items[i].GetLabels()[guacamolev1alpha1.DesktopLabelState]
+				switch state {
+				case string(guacamolev1alpha1.DesktopStateBooting):
+					booting++
+				case string(guacamolev1alpha1.DesktopStateProvisioning):
+					provisioning++
+				}
+			}
+		}
+	}
+	switch {
+	case booting > 0 && provisioning > 0:
+		return fmt.Sprintf("next in line; waiting for desktop readiness (%d booting, %d provisioning)", booting, provisioning)
+	case booting > 0:
+		return fmt.Sprintf("next in line; waiting for desktop readiness (%d booting)", booting)
+	case provisioning > 0:
+		return fmt.Sprintf("next in line; waiting for desktop readiness (%d provisioning)", provisioning)
+	default:
+		return fmt.Sprintf("next in line; %s", reserveErr.Error())
+	}
 }
 
 func (r *DesktopSessionReconciler) reserveAvailableDesktop(
@@ -340,28 +443,43 @@ func (r *DesktopSessionReconciler) releaseSession(
 		policy = "Delete"
 	}
 
+	// Broker handoff: if someone is already queued for this pool, keep the warm
+	// desktop and mark it Available immediately. Destroying it (Delete) forces the
+	// waiter through a full Windows boot and looks like a stuck queue.
+	waiters, err := r.listPoolWaiters(ctx, session.Namespace, pool.Name)
+	if err != nil {
+		return err
+	}
+	if len(waiters) > 0 {
+		return r.markDesktopAvailableForHandoff(ctx, session.Namespace, vmName)
+	}
+
 	switch policy {
 	case "Retain":
-		vm := &unstructured.Unstructured{}
-		vm.SetGroupVersionKind(virtualMachineGVK)
-		if err := r.Get(ctx, types.NamespacedName{Name: vmName, Namespace: session.Namespace}, vm); err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil
-			}
-			return err
-		}
-		labels := vm.GetLabels()
-		if labels == nil {
-			labels = map[string]string{}
-		}
-		delete(labels, guacamolev1alpha1.DesktopLabelSession)
-		delete(labels, guacamolev1alpha1.DesktopLabelRequester)
-		labels[guacamolev1alpha1.DesktopLabelState] = string(guacamolev1alpha1.DesktopStateAvailable)
-		vm.SetLabels(labels)
-		return r.Update(ctx, vm)
+		return r.markDesktopAvailableForHandoff(ctx, session.Namespace, vmName)
 	default: // Delete
 		return deleteDesktopResources(ctx, r.Client, session.Namespace, vmName)
 	}
+}
+
+func (r *DesktopSessionReconciler) markDesktopAvailableForHandoff(ctx context.Context, namespace, vmName string) error {
+	vm := &unstructured.Unstructured{}
+	vm.SetGroupVersionKind(virtualMachineGVK)
+	if err := r.Get(ctx, types.NamespacedName{Name: vmName, Namespace: namespace}, vm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	labels := vm.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	delete(labels, guacamolev1alpha1.DesktopLabelSession)
+	delete(labels, guacamolev1alpha1.DesktopLabelRequester)
+	labels[guacamolev1alpha1.DesktopLabelState] = string(guacamolev1alpha1.DesktopStateAvailable)
+	vm.SetLabels(labels)
+	return r.Update(ctx, vm)
 }
 
 func (r *DesktopSessionReconciler) finalizeSession(ctx context.Context, session *guacamolev1alpha1.DesktopSession) (ctrl.Result, error) {
@@ -409,6 +527,7 @@ func sessionTTLExpired(session *guacamolev1alpha1.DesktopSession) (bool, time.Du
 
 func (r *DesktopSessionReconciler) failSession(ctx context.Context, session *guacamolev1alpha1.DesktopSession, message string) (ctrl.Result, error) {
 	if err := r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+		clearBrokerQueueStatus(status)
 		status.Phase = guacamolev1alpha1.DesktopSessionPhaseFailed
 		status.Message = message
 		setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "Failed", message)
@@ -461,5 +580,62 @@ func (r *DesktopSessionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&guacamolev1alpha1.DesktopSession{}).
 		Owns(&guacamolev1alpha1.GuacamoleConnection{}).
+		Watches(
+			&guacamolev1alpha1.DesktopPool{},
+			handler.EnqueueRequestsFromMapFunc(r.mapPoolToWaitingSessions),
+		).
+		Watches(
+			&guacamolev1alpha1.DesktopSession{},
+			handler.EnqueueRequestsFromMapFunc(r.mapSessionToSiblingWaiters),
+		).
 		Complete(r)
+}
+
+// mapPoolToWaitingSessions wakes broker waiters when pool capacity/status changes.
+func (r *DesktopSessionReconciler) mapPoolToWaitingSessions(ctx context.Context, obj client.Object) []reconcile.Request {
+	pool, ok := obj.(*guacamolev1alpha1.DesktopPool)
+	if !ok {
+		return nil
+	}
+	waiters, err := r.listPoolWaiters(ctx, pool.Namespace, pool.Name)
+	if err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(waiters))
+	for i := range waiters {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: waiters[i].Name, Namespace: waiters[i].Namespace},
+		})
+	}
+	return reqs
+}
+
+// mapSessionToSiblingWaiters requeues other waiters when a session is released/deleted
+// so the next queued subject can claim a desktop immediately.
+func (r *DesktopSessionReconciler) mapSessionToSiblingWaiters(ctx context.Context, obj client.Object) []reconcile.Request {
+	session, ok := obj.(*guacamolev1alpha1.DesktopSession)
+	if !ok || session.Spec.PoolRef.Name == "" {
+		return nil
+	}
+	releasing := !session.DeletionTimestamp.IsZero() ||
+		session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseReleased ||
+		session.Status.DesktopName != ""
+	// Skip pure queue-position updates (waiting, no desktop yet).
+	if !releasing && isWaitingForBroker(session) {
+		return nil
+	}
+	waiters, err := r.listPoolWaiters(ctx, session.Namespace, session.Spec.PoolRef.Name)
+	if err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(waiters))
+	for i := range waiters {
+		if waiters[i].Name == session.Name {
+			continue
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: waiters[i].Name, Namespace: waiters[i].Namespace},
+		})
+	}
+	return reqs
 }

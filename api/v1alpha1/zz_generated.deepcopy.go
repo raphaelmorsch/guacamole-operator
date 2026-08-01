@@ -544,6 +544,16 @@ func (in *DesktopSessionSpec) DeepCopyInto(out *DesktopSessionSpec) {
 	*out = *in
 	out.PoolRef = in.PoolRef
 	out.Requester = in.Requester
+	if in.Priority != nil {
+		in, out := &in.Priority, &out.Priority
+		*out = new(int32)
+		**out = **in
+	}
+	if in.MaxQueueSeconds != nil {
+		in, out := &in.MaxQueueSeconds, &out.MaxQueueSeconds
+		*out = new(int64)
+		**out = **in
+	}
 	if in.TTLSecondsAfterReady != nil {
 		in, out := &in.TTLSecondsAfterReady, &out.TTLSecondsAfterReady
 		*out = new(int64)
@@ -567,6 +577,20 @@ func (in *DesktopSessionStatus) DeepCopyInto(out *DesktopSessionStatus) {
 	if in.ReadyAt != nil {
 		in, out := &in.ReadyAt, &out.ReadyAt
 		*out = (*in).DeepCopy()
+	}
+	if in.QueuedAt != nil {
+		in, out := &in.QueuedAt, &out.QueuedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.QueuePosition != nil {
+		in, out := &in.QueuePosition, &out.QueuePosition
+		*out = new(int32)
+		**out = **in
+	}
+	if in.QueueLength != nil {
+		in, out := &in.QueueLength, &out.QueueLength
+		*out = new(int32)
+		**out = **in
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions

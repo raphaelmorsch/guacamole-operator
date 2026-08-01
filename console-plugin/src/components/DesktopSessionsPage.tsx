@@ -35,8 +35,19 @@ type KeycloakUser = {
 
 type SessionItem = {
   metadata?: { name?: string; namespace?: string; creationTimestamp?: string };
-  spec?: { requester?: { subject?: string }; poolRef?: { name?: string } };
-  status?: { phase?: string; desktopName?: string; connectionName?: string };
+  spec?: {
+    requester?: { subject?: string };
+    poolRef?: { name?: string };
+    priority?: number;
+  };
+  status?: {
+    phase?: string;
+    desktopName?: string;
+    connectionName?: string;
+    queuePosition?: number;
+    queueLength?: number;
+    message?: string;
+  };
 };
 
 type BatchResultItem = {
@@ -414,12 +425,18 @@ const DesktopSessionsPage: React.FC = () => {
                   <th>Name</th>
                   <th>Subject</th>
                   <th>Phase</th>
+                  <th>Queue</th>
                   <th>Desktop</th>
+                  <th>Message</th>
                 </tr>
               </thead>
               <tbody>
                 {sessions.map((s) => {
                   const name = s.metadata?.name || '';
+                  const queue =
+                    s.status?.queuePosition != null
+                      ? `${s.status.queuePosition}/${s.status.queueLength || '?'}`
+                      : '—';
                   return (
                     <tr key={name}>
                       <td>
@@ -434,7 +451,9 @@ const DesktopSessionsPage: React.FC = () => {
                       <td>{name}</td>
                       <td>{s.spec?.requester?.subject}</td>
                       <td>{s.status?.phase || 'Pending'}</td>
+                      <td>{queue}</td>
                       <td>{s.status?.desktopName || '—'}</td>
+                      <td>{s.status?.message || '—'}</td>
                     </tr>
                   );
                 })}

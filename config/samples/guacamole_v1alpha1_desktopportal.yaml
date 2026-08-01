@@ -15,7 +15,10 @@ spec:
   enablePlugin: true
   navSection: home
   keycloak:
-    url: https://keycloak.apps.example.com
+    # Prefer the in-cluster Service URL so portal-api can reach Keycloak
+    # (OpenShift Route hairpin from pods often times out → Bad Gateway on /users).
+    # Example: http://keycloak-service.guacamole-desktops.svc:8080
+    url: http://keycloak-service.guacamole-desktops.svc:8080
     realm: guacamole
     clientID: guacamole-desktop-portal
     clientSecretRef:

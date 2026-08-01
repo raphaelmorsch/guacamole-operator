@@ -28,6 +28,18 @@ type DesktopSessionSpec struct {
 	// Requester identifies who requested the desktop.
 	Requester DesktopSessionRequester `json:"requester"`
 
+	// Priority controls broker queue order when the pool has no Available desktop.
+	// Higher values are served first; equal priorities use FIFO (creationTimestamp).
+	// +optional
+	// +kubebuilder:default=0
+	Priority *int32 `json:"priority,omitempty"`
+
+	// MaxQueueSeconds fails the session if it waits in the broker queue longer
+	// than this duration. Zero/unset means wait indefinitely.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MaxQueueSeconds *int64 `json:"maxQueueSeconds,omitempty"`
+
 	// TTLSecondsAfterReady optionally bounds how long a Ready session may live
 	// before the controller releases it. Zero/unset means no automatic expiry.
 	// +optional
@@ -52,6 +64,7 @@ type DesktopSessionPhase string
 
 const (
 	DesktopSessionPhasePending  DesktopSessionPhase = "Pending"
+	DesktopSessionPhaseQueued   DesktopSessionPhase = "Queued"
 	DesktopSessionPhaseReady    DesktopSessionPhase = "Ready"
 	DesktopSessionPhaseFailed   DesktopSessionPhase = "Failed"
 	DesktopSessionPhaseReleased DesktopSessionPhase = "Released"
@@ -78,7 +91,20 @@ type DesktopSessionStatus struct {
 	// +optional
 	ReadyAt *metav1.Time `json:"readyAt,omitempty"`
 
-	// Message holds a human-readable detail for Failed/Pending states.
+	// QueuedAt is when the session entered the broker queue.
+	// +optional
+	QueuedAt *metav1.Time `json:"queuedAt,omitempty"`
+
+	// QueuePosition is this session's 1-based place in the pool broker queue.
+	// Only set while Phase=Queued.
+	// +optional
+	QueuePosition *int32 `json:"queuePosition,omitempty"`
+
+	// QueueLength is how many sessions are waiting for the same pool.
+	// +optional
+	QueueLength *int32 `json:"queueLength,omitempty"`
+
+	// Message holds a human-readable detail for Failed/Pending/Queued states.
 	// +optional
 	Message string `json:"message,omitempty"`
 
@@ -93,6 +119,7 @@ type DesktopSessionStatus struct {
 // +kubebuilder:printcolumn:name="Subject",type=string,JSONPath=`.spec.requester.subject`
 // +kubebuilder:printcolumn:name="Desktop",type=string,JSONPath=`.status.desktopName`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Queue",type=string,JSONPath=`.status.queuePosition`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // DesktopSession represents a request for an exclusive desktop from a DesktopPool.

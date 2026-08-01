@@ -27,6 +27,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.queuePosition
+      name: Queue
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -58,6 +61,13 @@ spec:
           spec:
             description: DesktopSessionSpec requests an exclusive desktop from a DesktopPool.
             properties:
+              maxQueueSeconds:
+                description: |-
+                  MaxQueueSeconds fails the session if it waits in the broker queue longer
+                  than this duration. Zero/unset means wait indefinitely.
+                format: int64
+                minimum: 0
+                type: integer
               poolRef:
                 description: PoolRef references the DesktopPool that should allocate
                   a desktop.
@@ -68,6 +78,13 @@ spec:
                 required:
                 - name
                 type: object
+              priority:
+                default: 0
+                description: |-
+                  Priority controls broker queue order when the pool has no Available desktop.
+                  Higher values are served first; equal priorities use FIFO (creationTimestamp).
+                format: int32
+                type: integer
               requester:
                 description: Requester identifies who requested the desktop.
                 properties:
@@ -158,11 +175,26 @@ spec:
                 description: DesktopName is the VirtualMachine reserved for this session.
                 type: string
               message:
-                description: Message holds a human-readable detail for Failed/Pending
+                description: Message holds a human-readable detail for Failed/Pending/Queued
                   states.
                 type: string
               phase:
                 description: Phase is the current lifecycle phase.
+                type: string
+              queueLength:
+                description: QueueLength is how many sessions are waiting for the
+                  same pool.
+                format: int32
+                type: integer
+              queuePosition:
+                description: |-
+                  QueuePosition is this session's 1-based place in the pool broker queue.
+                  Only set while Phase=Queued.
+                format: int32
+                type: integer
+              queuedAt:
+                description: QueuedAt is when the session entered the broker queue.
+                format: date-time
                 type: string
               readyAt:
                 description: ReadyAt is when the session became Ready (used for TTL
