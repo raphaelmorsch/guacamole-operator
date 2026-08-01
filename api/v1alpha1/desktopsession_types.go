@@ -41,10 +41,18 @@ type DesktopSessionSpec struct {
 	MaxQueueSeconds *int64 `json:"maxQueueSeconds,omitempty"`
 
 	// TTLSecondsAfterReady optionally bounds how long a Ready session may live
-	// before the controller releases it. Zero/unset means no automatic expiry.
+	// before the controller releases it (max session time / logoff).
+	// Zero means disabled. Unset inherits DesktopPool.spec.sessionLifecycle.maxSecondsAfterReady.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	TTLSecondsAfterReady *int64 `json:"ttlSecondsAfterReady,omitempty"`
+
+	// IdleSecondsAfterDisconnect releases the session (logoff) after this many
+	// seconds without an active Guacamole tunnel. Zero means disabled.
+	// Unset inherits DesktopPool.spec.sessionLifecycle.idleSecondsAfterDisconnect.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	IdleSecondsAfterDisconnect *int64 `json:"idleSecondsAfterDisconnect,omitempty"`
 }
 
 // LocalObjectReference contains enough information to locate a namespaced object.
@@ -63,11 +71,29 @@ type DesktopSessionRequester struct {
 type DesktopSessionPhase string
 
 const (
-	DesktopSessionPhasePending  DesktopSessionPhase = "Pending"
-	DesktopSessionPhaseQueued   DesktopSessionPhase = "Queued"
-	DesktopSessionPhaseReady    DesktopSessionPhase = "Ready"
-	DesktopSessionPhaseFailed   DesktopSessionPhase = "Failed"
-	DesktopSessionPhaseReleased DesktopSessionPhase = "Released"
+	DesktopSessionPhasePending      DesktopSessionPhase = "Pending"
+	DesktopSessionPhaseQueued       DesktopSessionPhase = "Queued"
+	DesktopSessionPhaseReady        DesktopSessionPhase = "Ready"
+	DesktopSessionPhaseInUse        DesktopSessionPhase = "InUse"
+	DesktopSessionPhaseDisconnected DesktopSessionPhase = "Disconnected"
+	DesktopSessionPhaseFailed       DesktopSessionPhase = "Failed"
+	DesktopSessionPhaseReleased     DesktopSessionPhase = "Released"
+)
+
+// DesktopSessionConnectionState is the Guacamole tunnel state for a session.
+type DesktopSessionConnectionState string
+
+const (
+	DesktopSessionConnectionNone         DesktopSessionConnectionState = "None"
+	DesktopSessionConnectionConnected    DesktopSessionConnectionState = "Connected"
+	DesktopSessionConnectionDisconnected DesktopSessionConnectionState = "Disconnected"
+)
+
+// ReleasedReason values for DesktopSessionStatus.ReleasedReason.
+const (
+	DesktopSessionReleasedIdleTimeout = "IdleTimeout"
+	DesktopSessionReleasedMaxTTL      = "MaxTTL"
+	DesktopSessionReleasedDeleted     = "Deleted"
 )
 
 // DesktopSessionStatus defines the observed state of DesktopSession.
@@ -104,6 +130,27 @@ type DesktopSessionStatus struct {
 	// +optional
 	QueueLength *int32 `json:"queueLength,omitempty"`
 
+	// ConnectionState reflects whether a Guacamole tunnel is active.
+	// +optional
+	// +kubebuilder:validation:Enum=None;Connected;Disconnected
+	ConnectionState DesktopSessionConnectionState `json:"connectionState,omitempty"`
+
+	// ActiveTunnels is the number of open Guacamole tunnels for this session.
+	// +optional
+	ActiveTunnels int32 `json:"activeTunnels,omitempty"`
+
+	// LastActiveAt is the last time an active tunnel was observed.
+	// +optional
+	LastActiveAt *metav1.Time `json:"lastActiveAt,omitempty"`
+
+	// IdleSince is when the session entered a no-tunnel idle period.
+	// +optional
+	IdleSince *metav1.Time `json:"idleSince,omitempty"`
+
+	// ReleasedReason explains why the session was released (IdleTimeout, MaxTTL, Deleted).
+	// +optional
+	ReleasedReason string `json:"releasedReason,omitempty"`
+
 	// Message holds a human-readable detail for Failed/Pending/Queued states.
 	// +optional
 	Message string `json:"message,omitempty"`
@@ -119,6 +166,7 @@ type DesktopSessionStatus struct {
 // +kubebuilder:printcolumn:name="Subject",type=string,JSONPath=`.spec.requester.subject`
 // +kubebuilder:printcolumn:name="Desktop",type=string,JSONPath=`.status.desktopName`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Conn",type=string,JSONPath=`.status.connectionState`
 // +kubebuilder:printcolumn:name="Queue",type=string,JSONPath=`.status.queuePosition`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

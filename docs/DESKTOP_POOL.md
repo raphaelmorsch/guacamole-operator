@@ -137,6 +137,39 @@ A desktop becomes `Available` only when:
 
 Probe interface: `internal/readiness.DesktopReadinessProber` (fakeable in tests).
 
+## Session lifecycle
+
+Optional pool defaults (`spec.sessionLifecycle`) control disconnect vs logoff:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `idleSecondsAfterDisconnect` | `900` when the block is present | After the Guacamole tunnel closes (or never opens after Ready), release (logoff) the session |
+| `maxSecondsAfterReady` | `0` (off) | Wall-clock max session time from Ready; copied to new sessions as `ttlSecondsAfterReady` when set |
+
+Omit `sessionLifecycle` entirely for backward-compatible behavior (no idle logoff from the pool).
+
+Phases after allocation:
+
+```text
+Ready → InUse (active tunnel in guacamole_connection_history)
+      → Disconnected (tunnel closed; desktop still reserved)
+      → Released (idle timeout, max TTL, or delete)
+Disconnected → InUse on reconnect
+```
+
+Active tunnel = MySQL row with `end_date IS NULL` for the session connection name.
+
+DesktopSession may override pool idle with `spec.idleSecondsAfterDisconnect` (`0` disables). Max session time remains `spec.ttlSecondsAfterReady` (session wins over pool `maxSecondsAfterReady`).
+
+On delete, the operator force-logoffs by deleting the GuacamoleConnection first, then recycles the VM (`status.releasedReason=Deleted`).
+
+```yaml
+spec:
+  sessionLifecycle:
+    idleSecondsAfterDisconnect: 900
+    maxSecondsAfterReady: 0
+```
+
 ## DesktopSession
 
 With `createConnections: false`, connections appear only when a session allocates a VM:
@@ -152,6 +185,7 @@ spec:
     name: windows-desktop
   requester:
     subject: usuario1
+  # idleSecondsAfterDisconnect: 900
   # ttlSecondsAfterReady: 3600
 ```
 
@@ -160,8 +194,8 @@ Flow:
 ```text
 Pending → reserve Available VM (label state=Allocated)
        → create GuacamoleConnection (owned by session, READ for requester.subject)
-       → Ready
-delete/TTL → remove connection → Delete VM (recyclePolicy)
+       → Ready → InUse / Disconnected (tunnel poll)
+delete / idle / max TTL → remove connection → recycle VM
            → DesktopPool replenishes Available buffer
 ```
 

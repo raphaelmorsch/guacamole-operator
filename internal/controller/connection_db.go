@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	guacamolev1alpha1 "github.com/raphaelmorsch/guacamole-operator/api/v1alpha1"
 )
@@ -28,8 +29,16 @@ func (r *GuacamoleConnectionReconciler) resolveMySQLCredentials(
 	ctx context.Context,
 	guac *guacamolev1alpha1.Guacamole,
 ) (mysqlCredentials, error) {
+	return resolveMySQLCredentials(ctx, r.Client, guac)
+}
+
+func resolveMySQLCredentials(
+	ctx context.Context,
+	c client.Client,
+	guac *guacamolev1alpha1.Guacamole,
+) (mysqlCredentials, error) {
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{
+	if err := c.Get(ctx, types.NamespacedName{
 		Name:      mysqlSecretName(guac.Name),
 		Namespace: guac.Namespace,
 	}, secret); err != nil {

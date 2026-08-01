@@ -8,7 +8,9 @@ The `DesktopPortal` CR deploys an OpenShift Console dynamic plugin and a small A
 4. Shows DesktopPool status (`GET /pool`), updates pool config (`PUT /pool`), and can request wake/suspend (`POST /pool/wake`, `POST /pool/suspend`)
 5. Shows/updates the Guacamole instance linked by the pool (`GET/PUT /guacamole`)
 
-Editable pool fields: `replicas`, `minReady`, `recyclePolicy`, `createConnections`, `powerManagement.enabled`, `powerManagement.idleSeconds`.
+Editable pool fields: `replicas`, `minReady`, `recyclePolicy`, `createConnections`, `powerManagement.enabled`, `powerManagement.idleSeconds`, `sessionLifecycle.enabled`, `sessionLifecycle.idleSecondsAfterDisconnect`, `sessionLifecycle.maxSecondsAfterReady`.
+
+When creating sessions, the portal copies pool `sessionLifecycle` defaults into the DesktopSession (`idleSecondsAfterDisconnect`, and `ttlSecondsAfterReady` from `maxSecondsAfterReady` when greater than 0). The sessions table shows `status.connectionState` (Connected / Disconnected / None).
 
 Editable Guacamole fields: `replicas`, `guacdReplicas`, `logLevel`, `route.enabled`, and when OpenID is already configured — `openID.enabled`, `usernameClaimType`, `scope`, `extensionPriority`.
 

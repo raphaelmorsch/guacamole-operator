@@ -108,6 +108,30 @@ type DesktopPoolSpec struct {
 	// PowerManagement controls idle stop / wake-on-demand for pooled desktops.
 	// +optional
 	PowerManagement *DesktopPoolPowerManagementSpec `json:"powerManagement,omitempty"`
+
+	// SessionLifecycle sets default idle / max-session policies for DesktopSessions
+	// created against this pool (sessions may override per-object).
+	// +optional
+	SessionLifecycle *DesktopPoolSessionLifecycleSpec `json:"sessionLifecycle,omitempty"`
+}
+
+// DesktopPoolSessionLifecycleSpec configures disconnect idle and max session time defaults.
+type DesktopPoolSessionLifecycleSpec struct {
+	// IdleSecondsAfterDisconnect releases a DesktopSession after this many seconds
+	// without an active Guacamole tunnel (never connected or after disconnect).
+	// Zero disables idle logoff. Default is 900 (15 minutes) when the object is present
+	// and this field is unset.
+	// +kubebuilder:default=900
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	IdleSecondsAfterDisconnect *int64 `json:"idleSecondsAfterDisconnect,omitempty"`
+
+	// MaxSecondsAfterReady is the default max session lifetime applied to new
+	// DesktopSessions when their ttlSecondsAfterReady is unset. Zero disables.
+	// +kubebuilder:default=0
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxSecondsAfterReady *int64 `json:"maxSecondsAfterReady,omitempty"`
 }
 
 // DesktopPoolPowerManagementSpec configures idle stop and wake-on-demand.

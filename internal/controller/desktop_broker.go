@@ -37,7 +37,9 @@ func isWaitingForBroker(session *guacamolev1alpha1.DesktopSession) bool {
 	switch session.Status.Phase {
 	case guacamolev1alpha1.DesktopSessionPhaseFailed,
 		guacamolev1alpha1.DesktopSessionPhaseReleased,
-		guacamolev1alpha1.DesktopSessionPhaseReady:
+		guacamolev1alpha1.DesktopSessionPhaseReady,
+		guacamolev1alpha1.DesktopSessionPhaseInUse,
+		guacamolev1alpha1.DesktopSessionPhaseDisconnected:
 		return false
 	default:
 		return true

@@ -35,3 +35,7 @@ spec:
     idleSeconds: 900 # 15 minutes
   # Keep this many warm Available desktops even when idle (default 0).
   # minReady: 0
+  # Session lifecycle: logoff after disconnect idle; optional max session TTL.
+  sessionLifecycle:
+    idleSecondsAfterDisconnect: 900 # 15 minutes without Guacamole tunnel
+    maxSecondsAfterReady: 0         # 0 = no max wall-clock TTL

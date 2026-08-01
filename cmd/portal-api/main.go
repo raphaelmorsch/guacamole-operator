@@ -95,22 +95,29 @@ type poolDesktopView struct {
 	Message string `json:"message,omitempty"`
 }
 
+type poolSessionLifecycleView struct {
+	Enabled                    bool  `json:"enabled"`
+	IdleSecondsAfterDisconnect int64 `json:"idleSecondsAfterDisconnect"`
+	MaxSecondsAfterReady       int64 `json:"maxSecondsAfterReady"`
+}
+
 type poolStatusResponse struct {
-	Name              string                  `json:"name"`
-	Namespace         string                  `json:"namespace"`
-	Phase             string                  `json:"phase,omitempty"`
-	Desired           int64                   `json:"desired"`
-	Available         int64                   `json:"available"`
-	Allocated         int64                   `json:"allocated"`
-	Stopped           int64                   `json:"stopped"`
-	Provisioning      int64                   `json:"provisioning"`
-	Failed            int64                   `json:"failed"`
-	Replicas          int32                   `json:"replicas"`
-	MinReady          int32                   `json:"minReady"`
-	RecyclePolicy     string                  `json:"recyclePolicy"`
-	CreateConnections bool                    `json:"createConnections"`
-	PowerManagement   poolPowerManagementView `json:"powerManagement"`
-	Desktops          []poolDesktopView       `json:"desktops,omitempty"`
+	Name              string                     `json:"name"`
+	Namespace         string                     `json:"namespace"`
+	Phase             string                     `json:"phase,omitempty"`
+	Desired           int64                      `json:"desired"`
+	Available         int64                      `json:"available"`
+	Allocated         int64                      `json:"allocated"`
+	Stopped           int64                      `json:"stopped"`
+	Provisioning      int64                      `json:"provisioning"`
+	Failed            int64                      `json:"failed"`
+	Replicas          int32                      `json:"replicas"`
+	MinReady          int32                      `json:"minReady"`
+	RecyclePolicy     string                     `json:"recyclePolicy"`
+	CreateConnections bool                       `json:"createConnections"`
+	PowerManagement   poolPowerManagementView    `json:"powerManagement"`
+	SessionLifecycle  poolSessionLifecycleView   `json:"sessionLifecycle"`
+	Desktops          []poolDesktopView          `json:"desktops,omitempty"`
 }
 
 // poolConfigUpdate is the subset of DesktopPoolSpec editable from the portal.
@@ -123,6 +130,11 @@ type poolConfigUpdate struct {
 		Enabled     *bool  `json:"enabled,omitempty"`
 		IdleSeconds *int64 `json:"idleSeconds,omitempty"`
 	} `json:"powerManagement,omitempty"`
+	SessionLifecycle *struct {
+		Enabled                    *bool  `json:"enabled,omitempty"`
+		IdleSecondsAfterDisconnect *int64 `json:"idleSecondsAfterDisconnect,omitempty"`
+		MaxSecondsAfterReady       *int64 `json:"maxSecondsAfterReady,omitempty"`
+	} `json:"sessionLifecycle,omitempty"`
 }
 
 type guacamoleOpenIDView struct {
@@ -336,7 +348,10 @@ func main() {
 		}
 		results := make([]batchSessionResult, 0, len(subjects))
 		for _, subject := range subjects {
-			created, name, err := createDesktopSession(r.Context(), dyn, sessionsGVR, cfg.SessionNamespace, poolName, subject, "")
+			created, name, err := createDesktopSession(
+				r.Context(), dyn, sessionsGVR, poolsGVR,
+				cfg.SessionNamespace, cfg.PoolNamespace, poolName, subject, "",
+			)
 			if err != nil {
 				status := "error"
 				if strings.Contains(strings.ToLower(err.Error()), "already exists") {
@@ -425,7 +440,10 @@ func main() {
 			if poolName == "" {
 				poolName = cfg.PoolName
 			}
-			created, _, err := createDesktopSession(r.Context(), dyn, sessionsGVR, cfg.SessionNamespace, poolName, req.Subject, req.SessionName)
+			created, _, err := createDesktopSession(
+				r.Context(), dyn, sessionsGVR, poolsGVR,
+				cfg.SessionNamespace, cfg.PoolNamespace, poolName, req.Subject, req.SessionName,
+			)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
 				return
@@ -533,6 +551,17 @@ func getPoolStatus(
 	if v, ok := spec["createConnections"].(bool); ok {
 		createConns = v
 	}
+	sessionLifecycle := poolSessionLifecycleView{}
+	if sl, ok := spec["sessionLifecycle"].(map[string]interface{}); ok {
+		sessionLifecycle.Enabled = true
+		sessionLifecycle.IdleSecondsAfterDisconnect = 900
+		if v, ok := asInt64(sl["idleSecondsAfterDisconnect"]); ok {
+			sessionLifecycle.IdleSecondsAfterDisconnect = v
+		}
+		if v, ok := asInt64(sl["maxSecondsAfterReady"]); ok {
+			sessionLifecycle.MaxSecondsAfterReady = v
+		}
+	}
 
 	resp := &poolStatusResponse{
 		Name:              obj.GetName(),
@@ -552,6 +581,7 @@ func getPoolStatus(
 			Enabled:     enabled,
 			IdleSeconds: idleSeconds,
 		},
+		SessionLifecycle: sessionLifecycle,
 	}
 	if desktops, ok := status["desktops"].([]interface{}); ok {
 		for _, d := range desktops {
@@ -577,7 +607,7 @@ func updatePoolConfig(
 	req poolConfigUpdate,
 ) error {
 	if req.Replicas == nil && req.MinReady == nil && req.RecyclePolicy == "" &&
-		req.CreateConnections == nil && req.PowerManagement == nil {
+		req.CreateConnections == nil && req.PowerManagement == nil && req.SessionLifecycle == nil {
 		return fmt.Errorf("no configuration fields provided")
 	}
 	if req.Replicas != nil && *req.Replicas < 0 {
@@ -591,6 +621,14 @@ func updatePoolConfig(
 	}
 	if req.PowerManagement != nil && req.PowerManagement.IdleSeconds != nil && *req.PowerManagement.IdleSeconds < 0 {
 		return fmt.Errorf("powerManagement.idleSeconds must be >= 0")
+	}
+	if req.SessionLifecycle != nil {
+		if req.SessionLifecycle.IdleSecondsAfterDisconnect != nil && *req.SessionLifecycle.IdleSecondsAfterDisconnect < 0 {
+			return fmt.Errorf("sessionLifecycle.idleSecondsAfterDisconnect must be >= 0")
+		}
+		if req.SessionLifecycle.MaxSecondsAfterReady != nil && *req.SessionLifecycle.MaxSecondsAfterReady < 0 {
+			return fmt.Errorf("sessionLifecycle.maxSecondsAfterReady must be >= 0")
+		}
 	}
 
 	specPatch := map[string]interface{}{}
@@ -619,6 +657,24 @@ func updatePoolConfig(
 			pm["enabled"] = true
 		}
 		specPatch["powerManagement"] = pm
+	}
+	if req.SessionLifecycle != nil {
+		if req.SessionLifecycle.Enabled != nil && !*req.SessionLifecycle.Enabled {
+			specPatch["sessionLifecycle"] = nil
+		} else {
+			sl := map[string]interface{}{}
+			if req.SessionLifecycle.IdleSecondsAfterDisconnect != nil {
+				sl["idleSecondsAfterDisconnect"] = *req.SessionLifecycle.IdleSecondsAfterDisconnect
+			}
+			if req.SessionLifecycle.MaxSecondsAfterReady != nil {
+				sl["maxSecondsAfterReady"] = *req.SessionLifecycle.MaxSecondsAfterReady
+			}
+			if len(sl) == 0 {
+				// Explicit empty object enables the block with CRD defaults (idle 900).
+				sl["idleSecondsAfterDisconnect"] = int64(900)
+			}
+			specPatch["sessionLifecycle"] = sl
+		}
 	}
 	body, err := json.Marshal(map[string]interface{}{"spec": specPatch})
 	if err != nil {
@@ -855,8 +911,8 @@ func asInt64Default(v interface{}, def int64) int64 {
 func createDesktopSession(
 	ctx context.Context,
 	dyn dynamic.Interface,
-	gvr schema.GroupVersionResource,
-	namespace, poolName, subject, sessionName string,
+	sessionsGVR, poolsGVR schema.GroupVersionResource,
+	sessionNamespace, poolNamespace, poolName, subject, sessionName string,
 ) (*unstructured.Unstructured, string, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
@@ -866,29 +922,42 @@ func createDesktopSession(
 	if name == "" {
 		name = sanitizeName(fmt.Sprintf("desktop-session-%s", subject))
 	}
+	spec := map[string]interface{}{
+		"poolRef": map[string]interface{}{
+			"name": poolName,
+		},
+		"requester": map[string]interface{}{
+			"subject": subject,
+		},
+	}
+	if pool, err := dyn.Resource(poolsGVR).Namespace(poolNamespace).Get(ctx, poolName, metav1.GetOptions{}); err == nil {
+		if sl, ok, _ := unstructured.NestedMap(pool.Object, "spec", "sessionLifecycle"); ok && sl != nil {
+			if idle, ok, _ := unstructured.NestedInt64(pool.Object, "spec", "sessionLifecycle", "idleSecondsAfterDisconnect"); ok {
+				spec["idleSecondsAfterDisconnect"] = idle
+			} else {
+				spec["idleSecondsAfterDisconnect"] = int64(900)
+			}
+			if maxTTL, ok, _ := unstructured.NestedInt64(pool.Object, "spec", "sessionLifecycle", "maxSecondsAfterReady"); ok && maxTTL > 0 {
+				spec["ttlSecondsAfterReady"] = maxTTL
+			}
+		}
+	}
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "guacamole.guacamole.io/v1alpha1",
 			"kind":       "DesktopSession",
 			"metadata": map[string]interface{}{
 				"name":      name,
-				"namespace": namespace,
+				"namespace": sessionNamespace,
 				"labels": map[string]interface{}{
 					"desktop.guacamole.io/managed-by": "desktop-portal",
 					"desktop.guacamole.io/requester":  sanitizeLabel(subject),
 				},
 			},
-			"spec": map[string]interface{}{
-				"poolRef": map[string]interface{}{
-					"name": poolName,
-				},
-				"requester": map[string]interface{}{
-					"subject": subject,
-				},
-			},
+			"spec": spec,
 		},
 	}
-	created, err := dyn.Resource(gvr).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+	created, err := dyn.Resource(sessionsGVR).Namespace(sessionNamespace).Create(ctx, obj, metav1.CreateOptions{})
 	if err != nil {
 		return nil, name, err
 	}

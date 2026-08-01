@@ -27,6 +27,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.connectionState
+      name: Conn
+      type: string
     - jsonPath: .status.queuePosition
       name: Queue
       type: string
@@ -61,6 +64,14 @@ spec:
           spec:
             description: DesktopSessionSpec requests an exclusive desktop from a DesktopPool.
             properties:
+              idleSecondsAfterDisconnect:
+                description: |-
+                  IdleSecondsAfterDisconnect releases the session (logoff) after this many
+                  seconds without an active Guacamole tunnel. Zero means disabled.
+                  Unset inherits DesktopPool.spec.sessionLifecycle.idleSecondsAfterDisconnect.
+                format: int64
+                minimum: 0
+                type: integer
               maxQueueSeconds:
                 description: |-
                   MaxQueueSeconds fails the session if it waits in the broker queue longer
@@ -98,7 +109,8 @@ spec:
               ttlSecondsAfterReady:
                 description: |-
                   TTLSecondsAfterReady optionally bounds how long a Ready session may live
-                  before the controller releases it. Zero/unset means no automatic expiry.
+                  before the controller releases it (max session time / logoff).
+                  Zero means disabled. Unset inherits DesktopPool.spec.sessionLifecycle.maxSecondsAfterReady.
                 format: int64
                 minimum: 0
                 type: integer
@@ -109,6 +121,11 @@ spec:
           status:
             description: DesktopSessionStatus defines the observed state of DesktopSession.
             properties:
+              activeTunnels:
+                description: ActiveTunnels is the number of open Guacamole tunnels
+                  for this session.
+                format: int32
+                type: integer
               conditions:
                 description: Conditions represent the latest observations of the session
                   state.
@@ -171,8 +188,25 @@ spec:
                 description: ConnectionName is the GuacamoleConnection created for
                   this session.
                 type: string
+              connectionState:
+                description: ConnectionState reflects whether a Guacamole tunnel is
+                  active.
+                enum:
+                - None
+                - Connected
+                - Disconnected
+                type: string
               desktopName:
                 description: DesktopName is the VirtualMachine reserved for this session.
+                type: string
+              idleSince:
+                description: IdleSince is when the session entered a no-tunnel idle
+                  period.
+                format: date-time
+                type: string
+              lastActiveAt:
+                description: LastActiveAt is the last time an active tunnel was observed.
+                format: date-time
                 type: string
               message:
                 description: Message holds a human-readable detail for Failed/Pending/Queued
@@ -200,6 +234,10 @@ spec:
                 description: ReadyAt is when the session became Ready (used for TTL
                   expiry).
                 format: date-time
+                type: string
+              releasedReason:
+                description: ReleasedReason explains why the session was released
+                  (IdleTimeout, MaxTTL, Deleted).
                 type: string
               serviceDNS:
                 description: ServiceDNS is the RDP Service DNS for the allocated desktop.

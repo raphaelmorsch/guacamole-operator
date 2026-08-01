@@ -208,6 +208,30 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              sessionLifecycle:
+                description: |-
+                  SessionLifecycle sets default idle / max-session policies for DesktopSessions
+                  created against this pool (sessions may override per-object).
+                properties:
+                  idleSecondsAfterDisconnect:
+                    default: 900
+                    description: |-
+                      IdleSecondsAfterDisconnect releases a DesktopSession after this many seconds
+                      without an active Guacamole tunnel (never connected or after disconnect).
+                      Zero disables idle logoff. Default is 900 (15 minutes) when the object is present
+                      and this field is unset.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  maxSecondsAfterReady:
+                    default: 0
+                    description: |-
+                      MaxSecondsAfterReady is the default max session lifetime applied to new
+                      DesktopSessions when their ttlSecondsAfterReady is unset. Zero disables.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               source:
                 description: Source selects the golden image used to clone desktop
                   disks.

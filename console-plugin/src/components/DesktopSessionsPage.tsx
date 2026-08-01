@@ -39,11 +39,17 @@ type SessionItem = {
     requester?: { subject?: string };
     poolRef?: { name?: string };
     priority?: number;
+    idleSecondsAfterDisconnect?: number;
+    ttlSecondsAfterReady?: number;
   };
   status?: {
     phase?: string;
     desktopName?: string;
     connectionName?: string;
+    connectionState?: string;
+    activeTunnels?: number;
+    idleSince?: string;
+    releasedReason?: string;
     queuePosition?: number;
     queueLength?: number;
     message?: string;
@@ -83,6 +89,11 @@ type PoolStatus = {
     enabled: boolean;
     idleSeconds: number;
   };
+  sessionLifecycle: {
+    enabled: boolean;
+    idleSecondsAfterDisconnect: number;
+    maxSecondsAfterReady: number;
+  };
   desktops?: { name: string; state: string; message?: string }[];
 };
 
@@ -93,6 +104,9 @@ type PoolFormState = {
   createConnections: boolean;
   powerEnabled: boolean;
   idleSeconds: string;
+  sessionLifecycleEnabled: boolean;
+  idleSecondsAfterDisconnect: string;
+  maxSecondsAfterReady: string;
 };
 
 type GuacamoleStatus = {
@@ -160,6 +174,9 @@ const DesktopSessionsPage: React.FC = () => {
       createConnections: !!p.createConnections,
       powerEnabled: !!p.powerManagement?.enabled,
       idleSeconds: String(p.powerManagement?.idleSeconds ?? 900),
+      sessionLifecycleEnabled: !!p.sessionLifecycle?.enabled,
+      idleSecondsAfterDisconnect: String(p.sessionLifecycle?.idleSecondsAfterDisconnect ?? 900),
+      maxSecondsAfterReady: String(p.sessionLifecycle?.maxSecondsAfterReady ?? 0),
     });
   }, []);
 
@@ -400,6 +417,8 @@ const DesktopSessionsPage: React.FC = () => {
     const replicas = Number(poolForm.replicas);
     const minReady = Number(poolForm.minReady);
     const idleSeconds = Number(poolForm.idleSeconds);
+    const idleAfterDisconnect = Number(poolForm.idleSecondsAfterDisconnect);
+    const maxAfterReady = Number(poolForm.maxSecondsAfterReady);
     if (!Number.isInteger(replicas) || replicas < 0) {
       setError('Replicas must be an integer >= 0');
       return;
@@ -410,6 +429,14 @@ const DesktopSessionsPage: React.FC = () => {
     }
     if (!Number.isInteger(idleSeconds) || idleSeconds < 0) {
       setError('Idle seconds must be an integer >= 0');
+      return;
+    }
+    if (!Number.isInteger(idleAfterDisconnect) || idleAfterDisconnect < 0) {
+      setError('Session idle seconds after disconnect must be an integer >= 0');
+      return;
+    }
+    if (!Number.isInteger(maxAfterReady) || maxAfterReady < 0) {
+      setError('Max session seconds after ready must be an integer >= 0');
       return;
     }
     if (poolForm.recyclePolicy !== 'Delete' && poolForm.recyclePolicy !== 'Retain') {
@@ -430,6 +457,11 @@ const DesktopSessionsPage: React.FC = () => {
         powerManagement: {
           enabled: poolForm.powerEnabled,
           idleSeconds,
+        },
+        sessionLifecycle: {
+          enabled: poolForm.sessionLifecycleEnabled,
+          idleSecondsAfterDisconnect: idleAfterDisconnect,
+          maxSecondsAfterReady: maxAfterReady,
         },
       })) as PoolStatus;
       setPool(updated);
@@ -563,7 +595,7 @@ const DesktopSessionsPage: React.FC = () => {
               </>
             ) : null}
           </p>
-          <p style={{ marginBottom: 16 }}>
+          <p style={{ marginBottom: 8 }}>
             Power:{' '}
             <strong>{pool.powerManagement.enabled ? 'enabled' : 'disabled'}</strong>
             {pool.powerManagement.enabled ? (
@@ -572,6 +604,24 @@ const DesktopSessionsPage: React.FC = () => {
                 · idle <strong>{formatIdle(pool.powerManagement.idleSeconds)}</strong>
                 {' '}
                 · minReady <strong>{pool.minReady}</strong>
+              </>
+            ) : null}
+          </p>
+          <p style={{ marginBottom: 16 }}>
+            Session lifecycle:{' '}
+            <strong>{pool.sessionLifecycle?.enabled ? 'enabled' : 'disabled'}</strong>
+            {pool.sessionLifecycle?.enabled ? (
+              <>
+                {' '}
+                · disconnect idle{' '}
+                <strong>{formatIdle(pool.sessionLifecycle.idleSecondsAfterDisconnect)}</strong>
+                {' '}
+                · max TTL{' '}
+                <strong>
+                  {pool.sessionLifecycle.maxSecondsAfterReady > 0
+                    ? formatIdle(pool.sessionLifecycle.maxSecondsAfterReady)
+                    : 'off'}
+                </strong>
               </>
             ) : null}
           </p>
@@ -648,6 +698,41 @@ const DesktopSessionsPage: React.FC = () => {
                 value={poolForm.idleSeconds}
                 isDisabled={busy || !poolForm.powerEnabled}
                 onChange={(_e, v) => setPoolForm((f) => (f ? { ...f, idleSeconds: v } : f))}
+              />
+            </FormGroup>
+            <FormGroup fieldId="pool-session-lifecycle">
+              <Checkbox
+                id="pool-session-lifecycle"
+                label="Enable session lifecycle (idle logoff after disconnect)"
+                isChecked={poolForm.sessionLifecycleEnabled}
+                isDisabled={busy}
+                onChange={(_e, checked) =>
+                  setPoolForm((f) => (f ? { ...f, sessionLifecycleEnabled: checked } : f))
+                }
+              />
+            </FormGroup>
+            <FormGroup label="Idle seconds after disconnect (logoff)" fieldId="pool-session-idle">
+              <TextInput
+                id="pool-session-idle"
+                type="number"
+                min={0}
+                value={poolForm.idleSecondsAfterDisconnect}
+                isDisabled={busy || !poolForm.sessionLifecycleEnabled}
+                onChange={(_e, v) =>
+                  setPoolForm((f) => (f ? { ...f, idleSecondsAfterDisconnect: v } : f))
+                }
+              />
+            </FormGroup>
+            <FormGroup label="Max seconds after Ready (0 = off)" fieldId="pool-session-max">
+              <TextInput
+                id="pool-session-max"
+                type="number"
+                min={0}
+                value={poolForm.maxSecondsAfterReady}
+                isDisabled={busy || !poolForm.sessionLifecycleEnabled}
+                onChange={(_e, v) =>
+                  setPoolForm((f) => (f ? { ...f, maxSecondsAfterReady: v } : f))
+                }
               />
             </FormGroup>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -966,6 +1051,7 @@ const DesktopSessionsPage: React.FC = () => {
                   <th>Name</th>
                   <th>Subject</th>
                   <th>Phase</th>
+                  <th>Connection</th>
                   <th>Queue</th>
                   <th>Desktop</th>
                   <th>Message</th>
@@ -978,6 +1064,7 @@ const DesktopSessionsPage: React.FC = () => {
                     s.status?.queuePosition != null
                       ? `${s.status.queuePosition}/${s.status.queueLength || '?'}`
                       : '—';
+                  const conn = s.status?.connectionState || '—';
                   return (
                     <tr key={name}>
                       <td>
@@ -992,6 +1079,7 @@ const DesktopSessionsPage: React.FC = () => {
                       <td>{name}</td>
                       <td>{s.spec?.requester?.subject}</td>
                       <td>{s.status?.phase || 'Pending'}</td>
+                      <td>{conn}</td>
                       <td>{queue}</td>
                       <td>{s.status?.desktopName || '—'}</td>
                       <td>{s.status?.message || '—'}</td>

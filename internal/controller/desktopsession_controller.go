@@ -51,6 +51,7 @@ type DesktopSessionReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktopsessions/finalizers,verbs=update
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=desktoppools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoleconnections,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;virtualmachineinstances,verbs=get;list;watch;create;update;patch;delete
 
@@ -99,9 +100,11 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// Already allocated: ensure connection + TTL.
+	// Already allocated: ensure connection + session lifecycle (idle / max TTL / tunnel state).
 	if session.Status.DesktopName != "" &&
 		(session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseReady ||
+			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseInUse ||
+			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseDisconnected ||
 			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhasePending ||
 			session.Status.Phase == guacamolev1alpha1.DesktopSessionPhaseQueued) {
 		if err := r.ensureSessionConnection(ctx, session, pool); err != nil {
@@ -115,37 +118,31 @@ func (r *DesktopSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 
 		now := metav1.Now()
-		if err := r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
-			clearBrokerQueueStatus(status)
-			status.Phase = guacamolev1alpha1.DesktopSessionPhaseReady
-			status.ConnectionName = session.Name
-			status.ServiceDNS = rdpServiceDNS(session.Status.DesktopName, session.Namespace)
-			status.Message = ""
-			if status.ReadyAt == nil {
-				status.ReadyAt = &now
+		if session.Status.ReadyAt == nil {
+			if err := r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+				clearBrokerQueueStatus(status)
+				status.ConnectionName = session.Name
+				status.ServiceDNS = rdpServiceDNS(session.Status.DesktopName, session.Namespace)
+				if status.ReadyAt == nil {
+					status.ReadyAt = &now
+				}
+				if status.Phase == "" ||
+					status.Phase == guacamolev1alpha1.DesktopSessionPhasePending ||
+					status.Phase == guacamolev1alpha1.DesktopSessionPhaseQueued {
+					status.Phase = guacamolev1alpha1.DesktopSessionPhaseReady
+					status.ConnectionState = guacamolev1alpha1.DesktopSessionConnectionNone
+					status.Message = "desktop ready; waiting for user to connect"
+				}
+			}); err != nil {
+				return ctrl.Result{}, err
 			}
-			setDesktopSessionCondition(status, "Ready", metav1.ConditionTrue, "Allocated",
-				fmt.Sprintf("desktop %s allocated to %s", status.DesktopName, session.Spec.Requester.Subject))
-		}); err != nil {
-			return ctrl.Result{}, err
+			// Refresh for lifecycle evaluation.
+			if err := r.Get(ctx, req.NamespacedName, session); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 
-		if expired, requeueAfter := sessionTTLExpired(session); expired {
-			logger.Info("DesktopSession TTL expired; releasing", "ttl", *session.Spec.TTLSecondsAfterReady)
-			if err := r.releaseSession(ctx, session, pool); err != nil {
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
-			}
-			_ = r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
-				clearBrokerQueueStatus(status)
-				status.Phase = guacamolev1alpha1.DesktopSessionPhaseReleased
-				status.Message = "released after TTL"
-				setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "TTLExpired", "session released after TTL")
-			})
-			return ctrl.Result{}, nil
-		} else if requeueAfter > 0 {
-			return ctrl.Result{RequeueAfter: requeueAfter}, nil
-		}
-		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+		return r.reconcileSessionLifecycle(ctx, session, pool)
 	}
 
 	// Intelligent broker: fair queue (priority, then FIFO) before allocation.
@@ -508,10 +505,20 @@ func (r *DesktopSessionReconciler) finalizeSession(ctx context.Context, session 
 		}
 	}
 
-	if session.Status.DesktopName != "" {
+	// Force logoff: delete GuacamoleConnection (drops tunnel/ACL) then recycle desktop.
+	if session.Status.DesktopName != "" || session.Status.ConnectionName != "" || session.Name != "" {
 		if err := r.releaseSession(ctx, session, pool); err != nil {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 		}
+		_ = r.patchSessionStatus(ctx, session, func(status *guacamolev1alpha1.DesktopSessionStatus) {
+			clearBrokerQueueStatus(status)
+			status.Phase = guacamolev1alpha1.DesktopSessionPhaseReleased
+			status.ConnectionState = guacamolev1alpha1.DesktopSessionConnectionDisconnected
+			status.ActiveTunnels = 0
+			status.ReleasedReason = guacamolev1alpha1.DesktopSessionReleasedDeleted
+			status.Message = "force logoff on delete"
+			setDesktopSessionCondition(status, "Ready", metav1.ConditionFalse, "Deleted", "force logoff on delete")
+		})
 	}
 
 	controllerutil.RemoveFinalizer(session, desktopSessionFinalizer)
