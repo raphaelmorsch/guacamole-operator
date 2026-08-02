@@ -20,7 +20,7 @@ spec:
     # Public issuer (same realm as Guacamole OpenID) — not the in-cluster Service URL.
     issuer: https://keycloak.apps.example.com/realms/guacamole
     oidcClientID: guacamole-user-portal
-    # image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-desktop-user-portal:0.0.29
+    # image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-desktop-user-portal:0.0.30
   # Optional OpenShift groups treated as portal admins (in addition to SAR create desktopsessions).
   # adminGroups: ["desktop-portal-admins"]
   keycloak:
