@@ -14,6 +14,15 @@ spec:
   sessionNamespace: guacamole-desktops
   enablePlugin: true
   navSection: home
+  # Self-service PatternFly UI outside the Console (Route + Keycloak OIDC PKCE).
+  userPortal:
+    enabled: true
+    # Public issuer (same realm as Guacamole OpenID) — not the in-cluster Service URL.
+    issuer: https://keycloak.apps.example.com/realms/guacamole
+    oidcClientID: guacamole-user-portal
+    # image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-desktop-user-portal:0.0.29
+  # Optional OpenShift groups treated as portal admins (in addition to SAR create desktopsessions).
+  # adminGroups: ["desktop-portal-admins"]
   keycloak:
     # Prefer the in-cluster Service URL so portal-api can reach Keycloak
     # (OpenShift Route hairpin from pods often times out → Bad Gateway on /users).
@@ -29,6 +38,8 @@ spec:
 # Example secret for the Keycloak confidential client (client_credentials).
 # The client service account needs realm-management roles to query users
 # (e.g. view-users / query-users).
+# Separately, create a public Keycloak client guacamole-user-portal (PKCE)
+# with redirect URI https://<userPortalURL>/*.
 apiVersion: v1
 kind: Secret
 metadata:

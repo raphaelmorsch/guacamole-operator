@@ -1,59 +1,105 @@
-# DesktopPortal — OpenShift Console Dynamic Plugin
+# DesktopPortal — Admin Console plugin + self-service user portal
 
-The `DesktopPortal` CR deploys an OpenShift Console dynamic plugin and a small API that:
+The `DesktopPortal` CR deploys:
 
-1. Lists users from a Keycloak realm (Admin API + `client_credentials`)
-2. Creates `DesktopSession` objects for one or more selected users against a `DesktopPool` (batch create via `POST /sessions/batch`)
-3. Deletes existing sessions in batch (`POST /sessions/batch-delete`)
-4. Shows DesktopPool status (`GET /pool`), updates pool config (`PUT /pool`), and can request wake/suspend (`POST /pool/wake`, `POST /pool/suspend`)
-5. Shows/updates the Guacamole instance linked by the pool (`GET/PUT /guacamole`)
+1. An **OpenShift Console** dynamic plugin (admin) for batch allocate/release and pool/Guacamole config
+2. A **portal-api** that talks to Keycloak (user directory) and manages `DesktopSession`s
+3. Optionally a **self-service PatternFly UI** outside the Console (`spec.userPortal`) behind an OpenShift **Route**, with **Keycloak OIDC** login
 
-Editable pool fields: `replicas`, `minReady`, `recyclePolicy`, `createConnections`, `powerManagement.enabled`, `powerManagement.idleSeconds`, `sessionLifecycle.enabled`, `sessionLifecycle.idleSecondsAfterDisconnect`, `sessionLifecycle.maxSecondsAfterReady`.
+## Auth
 
-When creating sessions, the portal copies pool `sessionLifecycle` defaults into the DesktopSession (`idleSecondsAfterDisconnect`, and `ttlSecondsAfterReady` from `maxSecondsAfterReady` when greater than 0). The sessions table shows `status.connectionState` (Connected / Disconnected / None).
+| Surface | Identity | Endpoints |
+|---|---|---|
+| Self-service user portal | **Keycloak** access token (PKCE); portal-api checks token via Keycloak `userinfo` | `GET /me`, `GET/POST /sessions/mine`, `GET/DELETE /sessions/mine/{name}` |
+| Admin Console plugin | **OpenShift** Bearer (`UserToken`) via TokenReview + SAR `create desktopsessions` (or `spec.adminGroups`) | `/users`, batch sessions, pool/Guacamole writes, wake/suspend |
 
-Editable Guacamole fields: `replicas`, `guacdReplicas`, `logLevel`, `route.enabled`, and when OpenID is already configured — `openID.enabled`, `usernameClaimType`, `scope`, `extensionPriority`.
+`requester.subject` is the Keycloak `preferred_username` (same claim Guacamole OpenID uses).
+
+portal-api tries Keycloak `userinfo` first, then OpenShift TokenReview, so both surfaces share one API.
+
+## Self-service user portal
+
+Enable:
+
+```yaml
+spec:
+  userPortal:
+    enabled: true
+    # Public issuer (Route), NOT the in-cluster Service URL:
+    issuer: https://keycloak.apps.example.com/realms/guacamole
+    oidcClientID: guacamole-user-portal   # Keycloak public client (PKCE)
+    # image: .../guacamole-desktop-user-portal:0.0.29
+    # hostname: desktops.apps.example.com
+```
+
+Status: `status.userPortalURL` (external HTTPS URL).
+
+Users open the Route → Keycloak login → **Pedir desktop / Conectar / Reconectar / Liberar**. Session enrichment includes `uxPhase` and Guacamole `connectURL` deep-link.
+
+### Keycloak public client (user portal)
+
+Create a **public** client in the same realm as end users (separate from the confidential admin directory client and from the Guacamole client):
+
+- Client ID: `guacamole-user-portal` (or `spec.userPortal.oidcClientID`)
+- Client authentication: **OFF** (public)
+- Standard flow: ON
+- Direct access grants: OFF
+- Valid redirect URIs: `https://<userPortalURL>/*`
+- Web origins: `+` or the portal origin
+- PKCE: S256 (enforced by the SPA)
+
+### Keycloak confidential client (admin directory)
+
+Create a confidential client with a service account that can query users:
+
+- Client authentication: ON
+- Service accounts roles: `realm-management` → `view-users` / `query-users`
+
+Store the client secret in a Secret referenced by `spec.keycloak.clientSecretRef`.
+
+Set `spec.keycloak.url` to the **in-cluster Service** (for example
+`http://keycloak-service.guacamole-desktops.svc:8080`), not the public Route.
+Set `spec.userPortal.issuer` to the **public** issuer (same host Guacamole OpenID uses).
+
+## Admin Console plugin
+
+Nav: **Home → Desktop Sessions** (`/guacamole-desktops`).
+
+Capabilities:
+
+1. List Keycloak users and batch-create `DesktopSession`s
+2. Batch-delete sessions
+3. Configure DesktopPool (replicas, minReady, recycle, power, session lifecycle)
+4. Configure Guacamole (replicas, OpenID toggles when already configured)
+5. Per-session **Connect** when `connectURL` is available
+
+Editable pool fields: `replicas`, `minReady`, `recyclePolicy`, `createConnections`, `powerManagement.*`, `sessionLifecycle.*`.
+
+When creating sessions, the portal copies pool `sessionLifecycle` defaults into the DesktopSession.
 
 ## Flow
 
 ```text
 DesktopPortal CR
-   ├── Deployment/Service (plugin nginx + ConsolePlugin)
-   ├── Deployment/Service (portal-api)
-   ├── SA + Role/RoleBinding (create DesktopSessions)
+   ├── Deployment/Service (Console plugin nginx + ConsolePlugin)
+   ├── Deployment/Service (portal-api + TokenReview/SAR RBAC + Keycloak userinfo)
+   ├── optional: user-portal nginx SPA + Route (status.userPortalURL)
    └── optionally enables plugin on consoles.operator.openshift.io/cluster
 ```
-
-Console nav item: **Home → Desktop Sessions** (`/guacamole-desktops`).
 
 ## Sample
 
 See `config/samples/guacamole_v1alpha1_desktopportal.yaml`.
 
-### Keycloak client
-
-Create a confidential client with a service account that can query users, for example:
-
-- Client authentication: ON
-- Service accounts roles: `realm-management` → `view-users` / `query-users`
-
-Store the client secret in a Kubernetes Secret referenced by `spec.keycloak.clientSecretRef`.
-
-Set `spec.keycloak.url` to the **in-cluster Service** (for example
-`http://keycloak-service.guacamole-desktops.svc:8080`), not the public Route.
-Pods calling the Route hostname often hit hairpin/NAT timeouts and the Console
-shows **Bad Gateway** on user search.
-
 ### Images
 
-Build and push:
-
 ```bash
-# portal API
-podman build -f Dockerfile.portal-api -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-api:0.0.21 .
-
-# console plugin
-podman build -f console-plugin/Dockerfile -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-plugin:0.0.21 console-plugin/
+export VERSION=0.0.29
+podman build -f Dockerfile.portal-api -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-api:${VERSION} .
+podman build -f console-plugin/Dockerfile -t $REGISTRY/guacamole-operator/guacamole-desktop-portal-plugin:${VERSION} console-plugin/
+podman build -f user-portal/Dockerfile -t $REGISTRY/guacamole-operator/guacamole-desktop-user-portal:${VERSION} user-portal/
 ```
 
-Set `spec.pluginImage` / `spec.apiImage`, or inject `RELATED_IMAGE_DESKTOP_PORTAL_PLUGIN` and `RELATED_IMAGE_DESKTOP_PORTAL_API` on the operator Deployment.
+Set `spec.pluginImage` / `spec.apiImage` / `spec.userPortal.image`, or inject
+`RELATED_IMAGE_DESKTOP_PORTAL_PLUGIN`, `RELATED_IMAGE_DESKTOP_PORTAL_API`, and
+`RELATED_IMAGE_DESKTOP_USER_PORTAL` on the operator Deployment.

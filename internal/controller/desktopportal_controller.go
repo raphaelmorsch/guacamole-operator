@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -78,6 +79,9 @@ type DesktopPortalReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consoleplugins,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=consoles,verbs=get;list;watch;patch;update
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoleconnections,verbs=get;list;watch
 
 func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -137,33 +141,41 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	names := portalResourceNames(portal)
 
 	if err := r.ensureServiceAccount(ctx, portal, names.APIServiceAccount); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensureSessionRBAC(ctx, portal, names.APIServiceAccount, sessionNS); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensureGuacamoleRBACFromPool(ctx, portal, names.APIServiceAccount, portal.Spec.DefaultPool.Name, poolNS); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
+	}
+	// Console admin APIs authenticate via TokenReview/SAR.
+	if err := r.ensureAuthReviewClusterRBAC(ctx, portal, names); err != nil {
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensureAPIDeployment(ctx, portal, names, sessionNS, poolNS, secretName, secretKey); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensureAPIService(ctx, portal, names); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensurePluginDeployment(ctx, portal, names); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensurePluginService(ctx, portal, names); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if err := r.ensureConsolePlugin(ctx, portal, names); err != nil {
-		return r.fail(ctx, portal, err.Error())
+		return r.requeueOrFail(ctx, portal, err)
 	}
 	if ptr.Deref(portal.Spec.EnablePlugin, true) {
 		if err := r.ensureConsoleEnabled(ctx, names.Plugin); err != nil {
 			logger.Info("could not auto-enable console plugin; enable manually", "error", err.Error())
 		}
+	}
+	userPortalURL, err := r.reconcileUserPortal(ctx, portal, names)
+	if err != nil {
+		return r.requeueOrFail(ctx, portal, err)
 	}
 
 	portal.Status.Phase = guacamolev1alpha1.DesktopPortalPhaseReady
@@ -171,6 +183,7 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	portal.Status.PluginService = names.PluginService
 	portal.Status.APIService = names.APIService
 	portal.Status.ConsolePath = "/guacamole-desktops"
+	portal.Status.UserPortalURL = userPortalURL
 	meta.SetStatusCondition(&portal.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,
@@ -181,35 +194,52 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.Status().Update(ctx, portal); err != nil {
 		return ctrl.Result{}, err
 	}
+	if userPortalEnabled(portal) && userPortalURL == "" {
+		return ctrl.Result{Requeue: true}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
 type portalNames struct {
-	Plugin               string
-	PluginService        string
-	PluginDeployment     string
-	APIService           string
-	APIDeployment        string
-	APIServiceAccount    string
-	SessionRole          string
-	SessionRoleBinding   string
-	GuacamoleRole        string
-	GuacamoleRoleBinding string
+	Plugin                      string
+	PluginService               string
+	PluginDeployment            string
+	APIService                  string
+	APIDeployment               string
+	APIServiceAccount           string
+	SessionRole                 string
+	SessionRoleBinding          string
+	GuacamoleRole               string
+	GuacamoleRoleBinding        string
+	UserPortalDeployment        string
+	UserPortalService           string
+	UserPortalRoute             string
+	UserPortalOAuthSA           string
+	UserPortalCookieSecret      string
+	AuthReviewClusterRole       string
+	AuthReviewClusterRoleBinding string
 }
 
 func portalResourceNames(portal *guacamolev1alpha1.DesktopPortal) portalNames {
 	base := fmt.Sprintf("%s-portal", portal.Name)
 	return portalNames{
-		Plugin:               portalPluginName,
-		PluginService:        base + "-plugin",
-		PluginDeployment:     base + "-plugin",
-		APIService:           base + "-api",
-		APIDeployment:        base + "-api",
-		APIServiceAccount:    base + "-api",
-		SessionRole:          base + "-sessions",
-		SessionRoleBinding:   base + "-sessions",
-		GuacamoleRole:        base + "-guacamole",
-		GuacamoleRoleBinding: base + "-guacamole",
+		Plugin:                       portalPluginName,
+		PluginService:                base + "-plugin",
+		PluginDeployment:             base + "-plugin",
+		APIService:                   base + "-api",
+		APIDeployment:                base + "-api",
+		APIServiceAccount:            base + "-api",
+		SessionRole:                  base + "-sessions",
+		SessionRoleBinding:           base + "-sessions",
+		GuacamoleRole:                base + "-guacamole",
+		GuacamoleRoleBinding:         base + "-guacamole",
+		UserPortalDeployment:         base + "-user",
+		UserPortalService:            base + "-user",
+		UserPortalRoute:              base + "-user",
+		UserPortalOAuthSA:            base + "-user-oauth",
+		UserPortalCookieSecret:       base + "-user-proxy",
+		AuthReviewClusterRole:        base + "-authreview",
+		AuthReviewClusterRoleBinding: base + "-authreview",
 	}
 }
 
@@ -236,8 +266,20 @@ func (r *DesktopPortalReconciler) fail(ctx context.Context, portal *guacamolev1a
 	return ctrl.Result{}, fmt.Errorf("%s", msg)
 }
 
+// requeueOrFail retries conflicts/transient API errors without marking the CR Failed.
+func (r *DesktopPortalReconciler) requeueOrFail(ctx context.Context, portal *guacamolev1alpha1.DesktopPortal, err error) (ctrl.Result, error) {
+	if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+		return ctrl.Result{Requeue: true}, err
+	}
+	return r.fail(ctx, portal, err.Error())
+}
+
 func (r *DesktopPortalReconciler) finalize(ctx context.Context, portal *guacamolev1alpha1.DesktopPortal) (ctrl.Result, error) {
 	names := portalResourceNames(portal)
+	_ = r.deleteUserPortalResources(ctx, portal, names)
+	_ = r.Delete(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: names.AuthReviewClusterRoleBinding}})
+	_ = r.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: names.AuthReviewClusterRole}})
+	_ = r.Delete(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: names.UserPortalOAuthSA + "-auth-delegator"}})
 	if ptr.Deref(portal.Spec.EnablePlugin, true) {
 		_ = r.disableConsolePlugin(ctx, names.Plugin)
 	}
@@ -407,6 +449,11 @@ func (r *DesktopPortalReconciler) ensureSessionRBAC(ctx context.Context, portal 
 				Resources: []string{"desktoppools"},
 				Verbs:     []string{"get", "list", "watch", "patch", "update"},
 			},
+			{
+				APIGroups: []string{"guacamole.guacamole.io"},
+				Resources: []string{"guacamoleconnections"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
 		}
 		return nil
 	})
@@ -460,7 +507,7 @@ func (r *DesktopPortalReconciler) ensureAPIDeployment(
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: names.APIDeployment, Namespace: portal.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+	mutate := func() error {
 		if err := controllerutil.SetControllerReference(portal, deploy, r.Scheme); err != nil {
 			return err
 		}
@@ -508,6 +555,9 @@ func (r *DesktopPortalReconciler) ensureAPIDeployment(
 					}},
 				},
 				{Name: "KEYCLOAK_INSECURE_SKIP_VERIFY", Value: fmt.Sprintf("%t", portal.Spec.Keycloak.InsecureSkipVerify)},
+				{Name: "ADMIN_GROUPS", Value: strings.Join(portal.Spec.AdminGroups, ",")},
+				{Name: "OIDC_ISSUER", Value: userPortalIssuer(portal)},
+				{Name: "OIDC_CLIENT_ID", Value: userPortalOIDCClientID(portal)},
 			},
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
@@ -525,7 +575,18 @@ func (r *DesktopPortalReconciler) ensureAPIDeployment(
 			},
 		}}
 		return nil
-	})
+	}
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deploy, mutate)
+		if err == nil || !apierrors.IsConflict(err) {
+			return err
+		}
+		// Reload and retry on conflict (Deployment watch often races with CreateOrUpdate).
+		if getErr := r.Get(ctx, types.NamespacedName{Name: names.APIDeployment, Namespace: portal.Namespace}, deploy); getErr != nil && !apierrors.IsNotFound(getErr) {
+			return getErr
+		}
+	}
 	return err
 }
 

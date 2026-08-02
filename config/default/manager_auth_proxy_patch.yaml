@@ -44,6 +44,8 @@ spec:
           value: __DESKTOP_PORTAL_PLUGIN_IMAGE__
         - name: RELATED_IMAGE_DESKTOP_PORTAL_API
           value: __DESKTOP_PORTAL_API_IMAGE__
+        - name: RELATED_IMAGE_DESKTOP_USER_PORTAL
+          value: __DESKTOP_USER_PORTAL_IMAGE__
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:

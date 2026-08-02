@@ -64,6 +64,46 @@ type DesktopPortalSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// UserPortal exposes a self-service PatternFly UI outside the Console via Route.
+	// End users authenticate with Keycloak (same realm as the user directory / Guacamole OpenID).
+	// Omit to keep Console-admin-only (backward compatible).
+	// +optional
+	UserPortal *DesktopPortalUserPortalSpec `json:"userPortal,omitempty"`
+
+	// AdminGroups grants portal admin APIs (batch allocate, pool config) to these OpenShift groups.
+	// Users who can create DesktopSessions in the session namespace are also treated as admins.
+	// +optional
+	AdminGroups []string `json:"adminGroups,omitempty"`
+}
+
+// DesktopPortalUserPortalSpec configures the external self-service portal.
+type DesktopPortalUserPortalSpec struct {
+	// Enabled deploys the user portal Route when true.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Image is the user-portal container image (nginx + PatternFly SPA).
+	// Defaults to RELATED_IMAGE_DESKTOP_USER_PORTAL on the operator.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Hostname is an optional Route host.
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// Issuer is the public Keycloak OIDC issuer URL used by the browser login
+	// (e.g. https://keycloak.apps.example.com/realms/guacamole).
+	// Required when userPortal is enabled. Must match the iss claim of access tokens.
+	// Prefer the public Route issuer (same as Guacamole OpenID), not the in-cluster Service URL.
+	Issuer string `json:"issuer"`
+
+	// OIDCClientID is a Keycloak public client (standard flow + PKCE) for the user portal.
+	// Do not reuse the confidential admin directory client or the Guacamole client.
+	// +kubebuilder:default="guacamole-user-portal"
+	// +optional
+	OIDCClientID string `json:"oidcClientID,omitempty"`
 }
 
 // NamespacedObjectReference references a namespaced Kubernetes object.
@@ -126,6 +166,10 @@ type DesktopPortalStatus struct {
 	// +optional
 	ConsolePath string `json:"consolePath,omitempty"`
 
+	// UserPortalURL is the external self-service portal URL when userPortal is enabled.
+	// +optional
+	UserPortalURL string `json:"userPortalURL,omitempty"`
+
 	// Conditions represent the latest available observations.
 	// +optional
 	// +listType=map
@@ -138,6 +182,7 @@ type DesktopPortalStatus struct {
 // +kubebuilder:resource:shortName=dportal
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Plugin",type=string,JSONPath=`.status.pluginName`
+// +kubebuilder:printcolumn:name="UserPortal",type=string,JSONPath=`.status.userPortalURL`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // DesktopPortal deploys an OpenShift Console dynamic plugin for DesktopSession allocation.

@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.pluginName
       name: Plugin
       type: string
+    - jsonPath: .status.userPortalURL
+      name: UserPortal
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -54,6 +57,13 @@ spec:
               DesktopPortalSpec deploys an OpenShift Console dynamic plugin for allocating
               DesktopSessions to users sourced from an identity provider (e.g. Keycloak).
             properties:
+              adminGroups:
+                description: |-
+                  AdminGroups grants portal admin APIs (batch allocate, pool config) to these OpenShift groups.
+                  Users who can create DesktopSessions in the session namespace are also treated as admins.
+                items:
+                  type: string
+                type: array
               apiImage:
                 description: |-
                   APIImage is the container image for the portal API (Keycloak + DesktopSession).
@@ -139,6 +149,40 @@ spec:
                   SessionNamespace is where DesktopSession objects are created.
                   Defaults to defaultPool.namespace, then to this resource's namespace.
                 type: string
+              userPortal:
+                description: |-
+                  UserPortal exposes a self-service PatternFly UI outside the Console via Route.
+                  End users authenticate with Keycloak (same realm as the user directory / Guacamole OpenID).
+                  Omit to keep Console-admin-only (backward compatible).
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled deploys the user portal Route when true.
+                    type: boolean
+                  hostname:
+                    description: Hostname is an optional Route host.
+                    type: string
+                  image:
+                    description: |-
+                      Image is the user-portal container image (nginx + PatternFly SPA).
+                      Defaults to RELATED_IMAGE_DESKTOP_USER_PORTAL on the operator.
+                    type: string
+                  issuer:
+                    description: |-
+                      Issuer is the public Keycloak OIDC issuer URL used by the browser login
+                      (e.g. https://keycloak.apps.example.com/realms/guacamole).
+                      Required when userPortal is enabled. Must match the iss claim of access tokens.
+                      Prefer the public Route issuer (same as Guacamole OpenID), not the in-cluster Service URL.
+                    type: string
+                  oidcClientID:
+                    default: guacamole-user-portal
+                    description: |-
+                      OIDCClientID is a Keycloak public client (standard flow + PKCE) for the user portal.
+                      Do not reuse the confidential admin directory client or the Guacamole client.
+                    type: string
+                required:
+                - issuer
+                type: object
             required:
             - defaultPool
             - keycloak
@@ -220,6 +264,10 @@ spec:
                 type: string
               pluginService:
                 description: PluginService is the Service hosting plugin assets.
+                type: string
+              userPortalURL:
+                description: UserPortalURL is the external self-service portal URL
+                  when userPortal is enabled.
                 type: string
             type: object
         type: object

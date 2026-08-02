@@ -34,27 +34,43 @@ type KeycloakUser = {
 };
 
 type SessionItem = {
-  metadata?: { name?: string; namespace?: string; creationTimestamp?: string };
-  spec?: {
-    requester?: { subject?: string };
-    poolRef?: { name?: string };
-    priority?: number;
-    idleSecondsAfterDisconnect?: number;
-    ttlSecondsAfterReady?: number;
-  };
+  name?: string;
+  namespace?: string;
+  subject?: string;
+  phase?: string;
+  uxPhase?: string;
+  connectionState?: string;
+  desktopName?: string;
+  queuePosition?: number;
+  queueLength?: number;
+  message?: string;
+  connectURL?: string;
+  guacamoleRouteURL?: string;
+  // Legacy CR shape (pre-0.0.28) — kept for resilience.
+  metadata?: { name?: string; namespace?: string };
+  spec?: { requester?: { subject?: string } };
   status?: {
     phase?: string;
     desktopName?: string;
-    connectionName?: string;
     connectionState?: string;
-    activeTunnels?: number;
-    idleSince?: string;
-    releasedReason?: string;
     queuePosition?: number;
     queueLength?: number;
     message?: string;
   };
 };
+
+const sessionName = (s: SessionItem) => s.name || s.metadata?.name || '';
+const sessionSubject = (s: SessionItem) => s.subject || s.spec?.requester?.subject || '';
+const sessionPhase = (s: SessionItem) => s.uxPhase || s.phase || s.status?.phase || 'Pending';
+const sessionConn = (s: SessionItem) => s.connectionState || s.status?.connectionState || '—';
+const sessionDesktop = (s: SessionItem) => s.desktopName || s.status?.desktopName || '—';
+const sessionMessage = (s: SessionItem) => s.message || s.status?.message || '—';
+const sessionQueue = (s: SessionItem) => {
+  const pos = s.queuePosition ?? s.status?.queuePosition;
+  const len = s.queueLength ?? s.status?.queueLength;
+  return pos != null ? `${pos}/${len || '?'}` : '—';
+};
+const sessionConnectURL = (s: SessionItem) => s.connectURL || s.guacamoleRouteURL || '';
 
 type BatchResultItem = {
   subject?: string;
@@ -196,8 +212,10 @@ const DesktopSessionsPage: React.FC = () => {
   const existingSubjects = React.useMemo(() => {
     const set = new Set<string>();
     sessions.forEach((s) => {
-      const subject = s.spec?.requester?.subject;
-      if (subject) set.add(subject);
+      const subject = sessionSubject(s);
+      if (subject && sessionPhase(s) !== 'Released' && sessionPhase(s) !== 'Failed') {
+        set.add(subject);
+      }
     });
     return set;
   }, [sessions]);
@@ -1055,16 +1073,17 @@ const DesktopSessionsPage: React.FC = () => {
                   <th>Queue</th>
                   <th>Desktop</th>
                   <th>Message</th>
+                  <th>Open</th>
                 </tr>
               </thead>
               <tbody>
                 {sessions.map((s) => {
-                  const name = s.metadata?.name || '';
-                  const queue =
-                    s.status?.queuePosition != null
-                      ? `${s.status.queuePosition}/${s.status.queueLength || '?'}`
-                      : '—';
-                  const conn = s.status?.connectionState || '—';
+                  const name = sessionName(s);
+                  const connectURL = sessionConnectURL(s);
+                  const phase = sessionPhase(s);
+                  const canOpen =
+                    !!connectURL &&
+                    (phase === 'Ready' || phase === 'InUse' || phase === 'Disconnected');
                   return (
                     <tr key={name}>
                       <td>
@@ -1077,12 +1096,28 @@ const DesktopSessionsPage: React.FC = () => {
                         />
                       </td>
                       <td>{name}</td>
-                      <td>{s.spec?.requester?.subject}</td>
-                      <td>{s.status?.phase || 'Pending'}</td>
-                      <td>{conn}</td>
-                      <td>{queue}</td>
-                      <td>{s.status?.desktopName || '—'}</td>
-                      <td>{s.status?.message || '—'}</td>
+                      <td>{sessionSubject(s)}</td>
+                      <td>{phase}</td>
+                      <td>{sessionConn(s)}</td>
+                      <td>{sessionQueue(s)}</td>
+                      <td>{sessionDesktop(s)}</td>
+                      <td>{sessionMessage(s)}</td>
+                      <td>
+                        {canOpen ? (
+                          <Button
+                            variant="link"
+                            isInline
+                            component="a"
+                            href={connectURL}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Connect
+                          </Button>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

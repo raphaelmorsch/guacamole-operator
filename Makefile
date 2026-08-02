@@ -3,7 +3,7 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= 0.0.28
+VERSION ?= 0.0.30
 
 # Internal OpenShift registry URL for images pulled by workloads in other namespaces.
 OPENSHIFT_INTERNAL_REGISTRY ?= image-registry.openshift-image-registry.svc:5000
@@ -15,6 +15,7 @@ METRICS_EXPORTER_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator-system
 # DesktopPortal related images (Console dynamic plugin + API).
 DESKTOP_PORTAL_PLUGIN_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator/guacamole-desktop-portal-plugin:$(VERSION)
 DESKTOP_PORTAL_API_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator/guacamole-desktop-portal-api:$(VERSION)
+DESKTOP_USER_PORTAL_IMG ?= $(OPENSHIFT_INTERNAL_REGISTRY)/guacamole-operator/guacamole-desktop-user-portal:$(VERSION)
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -183,6 +184,14 @@ docker-build-portal-plugin: ## Build OpenShift Console desktop portal plugin ima
 .PHONY: docker-push-portal-plugin
 docker-push-portal-plugin: ## Push OpenShift Console desktop portal plugin image.
 	$(CONTAINER_TOOL) push ${DESKTOP_PORTAL_PLUGIN_IMG}
+
+.PHONY: docker-build-user-portal
+docker-build-user-portal: ## Build self-service PatternFly user portal image.
+	$(CONTAINER_TOOL) build -f user-portal/Dockerfile -t ${DESKTOP_USER_PORTAL_IMG} user-portal/
+
+.PHONY: docker-push-user-portal
+docker-push-user-portal: ## Push self-service user portal image.
+	$(CONTAINER_TOOL) push ${DESKTOP_USER_PORTAL_IMG}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:

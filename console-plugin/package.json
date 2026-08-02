@@ -1,6 +1,6 @@
 {
   "name": "guacamole-desktop-portal",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "description": "OpenShift Console plugin to allocate Guacamole DesktopSessions from Keycloak users",
   "private": true,
   "license": "Apache-2.0",
@@ -29,7 +29,7 @@
   },
   "consolePlugin": {
     "name": "guacamole-desktop-portal",
-    "version": "0.0.27",
+    "version": "0.0.28",
     "displayName": "Guacamole Desktop Portal",
     "description": "Allocate DesktopSessions to Keycloak users",
     "exposedModules": {

@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -197,6 +198,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("dynamic client: %v", err)
 	}
+	kube, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		log.Fatalf("kubernetes client: %v", err)
+	}
 	sessionsGVR := schema.GroupVersionResource{
 		Group:    "guacamole.guacamole.io",
 		Version:  "v1alpha1",
@@ -212,6 +217,11 @@ func main() {
 		Version:  "v1alpha1",
 		Resource: "guacamoles",
 	}
+	connectionsGVR := schema.GroupVersionResource{
+		Group:    "guacamole.guacamole.io",
+		Version:  "v1alpha1",
+		Resource: "guacamoleconnections",
+	}
 
 	httpClient := &http.Client{
 		Timeout: 20 * time.Second,
@@ -220,11 +230,41 @@ func main() {
 		},
 	}
 	tokens := &tokenCache{}
+	oidcIssuer := strings.TrimRight(os.Getenv("OIDC_ISSUER"), "/")
+	oidcClientID := envOr("OIDC_CLIENT_ID", "guacamole-user-portal")
+	authn := newAuthenticator(
+		kube, httpClient, cfg.SessionNamespace,
+		parseAdminGroupsEnv(os.Getenv("ADMIN_GROUPS")),
+		kcURL, kcRealm, oidcIssuer, oidcClientID,
+	)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/oidc-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if oidcIssuer == "" {
+			http.Error(w, "oidc issuer not configured", http.StatusServiceUnavailable)
+			return
+		}
+		// keycloak-js wants base URL (without /realms/<realm>) + realm + clientId.
+		realm := kcRealm
+		base := oidcIssuer
+		if i := strings.LastIndex(oidcIssuer, "/realms/"); i >= 0 {
+			base = oidcIssuer[:i]
+			realm = oidcIssuer[i+len("/realms/"):]
+		}
+		writeJSON(w, map[string]string{
+			"issuer":   oidcIssuer,
+			"url":      base,
+			"realm":    realm,
+			"clientId": oidcClientID,
+		})
 	})
 	mux.HandleFunc("/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -233,7 +273,23 @@ func main() {
 		}
 		writeJSON(w, cfg)
 	})
-	mux.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/me", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := identityFromContext(r.Context())
+		if id == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		writeJSON(w, map[string]interface{}{
+			"username": id.Username,
+			"subject":  subjectFromIdentity(id),
+			"groups":   id.Groups,
+		})
+	})
+	mux.HandleFunc("/users", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -246,7 +302,7 @@ func main() {
 			return
 		}
 		writeJSON(w, users)
-	})
+	}))
 	mux.HandleFunc("/pool", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -257,21 +313,23 @@ func main() {
 			}
 			writeJSON(w, view)
 		case http.MethodPut, http.MethodPatch:
-			var req poolConfigUpdate
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid JSON body", http.StatusBadRequest)
-				return
-			}
-			if err := updatePoolConfig(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, view)
+			authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+				var req poolConfigUpdate
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON body", http.StatusBadRequest)
+					return
+				}
+				if err := updatePoolConfig(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				writeJSON(w, view)
+			})(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -286,26 +344,28 @@ func main() {
 			}
 			writeJSON(w, view)
 		case http.MethodPut, http.MethodPatch:
-			var req guacamoleConfigUpdate
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid JSON body", http.StatusBadRequest)
-				return
-			}
-			if err := updateGuacamoleConfig(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, view)
+			authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
+				var req guacamoleConfigUpdate
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON body", http.StatusBadRequest)
+					return
+				}
+				if err := updateGuacamoleConfig(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				writeJSON(w, view)
+			})(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	mux.HandleFunc("/pool/wake", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/pool/wake", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -315,8 +375,8 @@ func main() {
 			return
 		}
 		writeJSON(w, map[string]string{"status": "accepted", "action": "wake"})
-	})
-	mux.HandleFunc("/pool/suspend", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/pool/suspend", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -326,8 +386,112 @@ func main() {
 			return
 		}
 		writeJSON(w, map[string]string{"status": "accepted", "action": "suspend"})
+	}))
+	mux.HandleFunc("/sessions/mine", func(w http.ResponseWriter, r *http.Request) {
+		id := identityFromContext(r.Context())
+		subject := subjectFromIdentity(id)
+		if subject == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			list, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).List(r.Context(), metav1.ListOptions{})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			out := make([]sessionView, 0)
+			for i := range list.Items {
+				item := &list.Items[i]
+				if sessionRequesterSubject(item) != subject {
+					continue
+				}
+				out = append(out, enrichSession(
+					r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
+					cfg.PoolNamespace, cfg.PoolName, item,
+				))
+			}
+			writeJSON(w, out)
+		case http.MethodPost:
+			// Reclaim Released session with the same name so users can request again.
+			nameHint := sanitizeName(fmt.Sprintf("desktop-session-%s", subject))
+			if existing, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Get(r.Context(), nameHint, metav1.GetOptions{}); err == nil {
+				phase, _, _ := unstructured.NestedString(existing.Object, "status", "phase")
+				if phase == "Released" || phase == "Failed" {
+					_ = dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Delete(r.Context(), nameHint, metav1.DeleteOptions{})
+				} else if sessionRequesterSubject(existing) == subject {
+					writeJSON(w, enrichSession(
+						r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
+						cfg.PoolNamespace, cfg.PoolName, existing,
+					))
+					return
+				}
+			}
+			created, _, err := createDesktopSession(
+				r.Context(), dyn, sessionsGVR, poolsGVR,
+				cfg.SessionNamespace, cfg.PoolNamespace, cfg.PoolName, subject, "",
+			)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			writeJSON(w, enrichSession(
+				r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
+				cfg.PoolNamespace, cfg.PoolName, created,
+			))
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
-	mux.HandleFunc("/sessions/batch", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/sessions/mine/", func(w http.ResponseWriter, r *http.Request) {
+		id := identityFromContext(r.Context())
+		subject := subjectFromIdentity(id)
+		if subject == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/sessions/mine/")
+		name = strings.Trim(name, "/")
+		if name == "" || strings.Contains(name, "/") {
+			http.Error(w, "session name required", http.StatusBadRequest)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			obj, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Get(r.Context(), name, metav1.GetOptions{})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			if sessionRequesterSubject(obj) != subject {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			writeJSON(w, enrichSession(
+				r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
+				cfg.PoolNamespace, cfg.PoolName, obj,
+			))
+		case http.MethodDelete:
+			obj, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Get(r.Context(), name, metav1.GetOptions{})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			if sessionRequesterSubject(obj) != subject {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Delete(r.Context(), name, metav1.DeleteOptions{}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/sessions/batch", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -378,8 +542,8 @@ func main() {
 			"exists":  countBatchStatus(results, "exists"),
 			"errors":  countBatchStatus(results, "error"),
 		})
-	})
-	mux.HandleFunc("/sessions/batch-delete", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/sessions/batch-delete", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -415,8 +579,8 @@ func main() {
 			"deleted": countBatchStatus(results, "deleted"),
 			"errors":  countBatchStatus(results, "error"),
 		})
-	})
-	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/sessions", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			list, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).List(r.Context(), metav1.ListOptions{})
@@ -424,7 +588,14 @@ func main() {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			writeJSON(w, list.Items)
+			out := make([]sessionView, 0, len(list.Items))
+			for i := range list.Items {
+				out = append(out, enrichSession(
+					r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
+					cfg.PoolNamespace, cfg.PoolName, &list.Items[i],
+				))
+			}
+			writeJSON(w, out)
 		case http.MethodPost:
 			var req createSessionRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -448,19 +619,22 @@ func main() {
 				http.Error(w, err.Error(), http.StatusConflict)
 				return
 			}
-			writeJSON(w, created.Object)
+			writeJSON(w, enrichSession(
+				r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
+				cfg.PoolNamespace, cfg.PoolName, created,
+			))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/sessions/", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/sessions/", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/sessions/")
 		name = strings.Trim(name, "/")
-		if name == "" {
+		if name == "" || strings.HasPrefix(name, "mine") || strings.HasPrefix(name, "batch") {
 			http.Error(w, "session name required", http.StatusBadRequest)
 			return
 		}
@@ -470,17 +644,17 @@ func main() {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	})
+	}))
 
 	// Ensure typed import used (namespaced get for readiness of pool optional)
 	_ = types.NamespacedName{}
 
-	log.Printf("desktop portal API listening on %s (namespace=%s pool=%s)", addr, cfg.SessionNamespace, cfg.PoolName)
+	log.Printf("desktop portal API listening on %s (namespace=%s pool=%s oidcIssuer=%s)", addr, cfg.SessionNamespace, cfg.PoolName, oidcIssuer)
 
 	tlsAddr := os.Getenv("TLS_LISTEN_ADDR")
 	certFile := os.Getenv("TLS_CERT_FILE")
 	keyFile := os.Getenv("TLS_KEY_FILE")
-	handler := withCORS(mux)
+	handler := withCORS(authn.requireAuth(mux))
 
 	errCh := make(chan error, 2)
 	go func() {
