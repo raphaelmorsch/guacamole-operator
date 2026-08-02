@@ -69,6 +69,11 @@ spec:
                   APIImage is the container image for the portal API (Keycloak + DesktopSession).
                   Defaults to the RELATED_IMAGE_DESKTOP_PORTAL_API env on the operator.
                 type: string
+              consolePath:
+                description: |-
+                  ConsolePath overrides the in-console route path (must start with /).
+                  Must be unique cluster-wide. Defaults to /guacamole-desktops-{namespace}-{name}.
+                type: string
               defaultPool:
                 description: DefaultPool is the DesktopPool used when creating sessions
                   from the UI.
@@ -137,6 +142,12 @@ spec:
                 description: |-
                   PluginImage is the container image that serves the Console dynamic plugin assets.
                   Defaults to the RELATED_IMAGE_DESKTOP_PORTAL_PLUGIN env on the operator.
+                type: string
+              pluginName:
+                description: |-
+                  PluginName overrides the OpenShift ConsolePlugin resource name.
+                  Must be unique cluster-wide. Defaults to guac-dp-{namespace}-{name}.
+                  Set explicitly (e.g. guacamole-desktop-portal) to preserve an existing Console bookmark/path on upgrade.
                 type: string
               replicas:
                 default: 1

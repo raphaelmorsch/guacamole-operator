@@ -1,0 +1,38 @@
+# Second DesktopPortal example (multi-portal). Uses its own pool, Keycloak clients,
+# and Console plugin identity. Apply alongside guacamole_v1alpha1_desktopportal.yaml
+# after creating the referenced DesktopPool and secrets.
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: DesktopPortal
+metadata:
+  name: desktop-portal
+  namespace: team-b-desktops
+spec:
+  displayName: Team B Desktops
+  defaultPool:
+    name: windows-desktop
+    namespace: team-b-desktops
+  sessionNamespace: team-b-desktops
+  enablePlugin: true
+  navSection: home
+  userPortal:
+    enabled: true
+    issuer: https://keycloak.apps.example.com/realms/team-b
+    # Distinct public client + redirect URI for this portal's Route.
+    oidcClientID: team-b-user-portal
+  keycloak:
+    url: http://keycloak-service.team-b-desktops.svc:8080
+    realm: team-b
+    clientID: team-b-desktop-portal
+    clientSecretRef:
+      name: keycloak-portal-client
+      key: client-secret
+    insecureSkipVerify: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-portal-client
+  namespace: team-b-desktops
+type: Opaque
+stringData:
+  client-secret: change-me

@@ -157,7 +157,13 @@ type GuacamoleFormState = {
   extensionPriority: string;
 };
 
+// Baked-in defaults; rewritten at container start by docker-entrypoint.sh for multi-portal.
+const RUNTIME_PLUGIN_NAME = 'guacamole-desktop-portal';
+
 const proxyBase = (pluginName: string) => `/api/proxy/plugin/${pluginName}/portal-api`;
+
+const poolQuery = (poolName: string) =>
+  poolName ? `?poolName=${encodeURIComponent(poolName)}` : '';
 
 const formatIdle = (seconds: number) => {
   if (seconds < 60) return `${seconds}s`;
@@ -168,6 +174,8 @@ const formatIdle = (seconds: number) => {
 
 const DesktopSessionsPage: React.FC = () => {
   const [config, setConfig] = React.useState<PortalConfig | null>(null);
+  const [pools, setPools] = React.useState<PoolStatus[]>([]);
+  const [selectedPool, setSelectedPool] = React.useState('');
   const [search, setSearch] = React.useState('');
   const [users, setUsers] = React.useState<KeycloakUser[]>([]);
   const [selected, setSelected] = React.useState<Record<string, boolean>>({});
@@ -235,17 +243,11 @@ const DesktopSessionsPage: React.FC = () => {
     [users, existingSubjects],
   );
 
-  const load = React.useCallback(async () => {
-    setError(null);
-    try {
-      const pluginName = 'guacamole-desktop-portal';
-      const base = proxyBase(pluginName);
-      // consoleFetchJSON attaches OpenShift CSRF headers required by the console proxy.
-      const cfg = (await consoleFetchJSON(`${base}/config`)) as PortalConfig;
-      setConfig(cfg);
-
+  const loadPoolScoped = React.useCallback(
+    async (base: string, poolName: string) => {
+      const qs = poolQuery(poolName);
       try {
-        const items = (await consoleFetchJSON(`${base}/sessions`)) as SessionItem[];
+        const items = (await consoleFetchJSON(`${base}/sessions${qs}`)) as SessionItem[];
         setSessions(items || []);
         setSelectedSessions({});
       } catch {
@@ -254,7 +256,7 @@ const DesktopSessionsPage: React.FC = () => {
       }
 
       try {
-        const poolStatus = (await consoleFetchJSON(`${base}/pool`)) as PoolStatus;
+        const poolStatus = (await consoleFetchJSON(`${base}/pool${qs}`)) as PoolStatus;
         setPool(poolStatus);
         applyPoolToForm(poolStatus);
       } catch {
@@ -263,30 +265,65 @@ const DesktopSessionsPage: React.FC = () => {
       }
 
       try {
-        const guac = (await consoleFetchJSON(`${base}/guacamole`)) as GuacamoleStatus;
+        const guac = (await consoleFetchJSON(`${base}/guacamole${qs}`)) as GuacamoleStatus;
         setGuacamole(guac);
         applyGuacamoleToForm(guac);
       } catch {
         setGuacamole(null);
         setGuacamoleForm(null);
       }
+    },
+    [applyPoolToForm, applyGuacamoleToForm],
+  );
+
+  const load = React.useCallback(async () => {
+    setError(null);
+    try {
+      const base = proxyBase(RUNTIME_PLUGIN_NAME);
+      // consoleFetchJSON attaches OpenShift CSRF headers required by the console proxy.
+      const cfg = (await consoleFetchJSON(`${base}/config`)) as PortalConfig;
+      setConfig(cfg);
+
+      let poolList: PoolStatus[] = [];
+      try {
+        poolList = ((await consoleFetchJSON(`${base}/pools`)) as PoolStatus[]) || [];
+      } catch {
+        poolList = [];
+      }
+      setPools(poolList);
+
+      setSelectedPool((prev) => {
+        if (prev && (poolList.length === 0 || poolList.some((p) => p.name === prev))) {
+          return prev;
+        }
+        if (cfg.poolName && poolList.some((p) => p.name === cfg.poolName)) {
+          return cfg.poolName;
+        }
+        return poolList[0]?.name || cfg.poolName || '';
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [applyPoolToForm, applyGuacamoleToForm]);
+  }, []);
 
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  React.useEffect(() => {
+    if (!config || !selectedPool) return;
+    const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
+    void loadPoolScoped(base, selectedPool);
+  }, [config, selectedPool, loadPoolScoped]);
 
   const searchUsers = async () => {
     if (!config) return;
     setBusy(true);
     setError(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
       const qs = search ? `?search=${encodeURIComponent(search)}` : '';
       const items = (await consoleFetchJSON(`${base}/users${qs}`)) as KeycloakUser[];
       setUsers(items || []);
@@ -323,15 +360,15 @@ const DesktopSessionsPage: React.FC = () => {
   };
 
   const createSessions = async () => {
-    if (!config || selectedUsernames.length === 0) return;
+    if (!config || selectedUsernames.length === 0 || !selectedPool) return;
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
       const resp = (await consoleFetchJSON.post(`${base}/sessions/batch`, {
         subjects: selectedUsernames,
-        poolName: config.poolName,
+        poolName: selectedPool,
       })) as BatchResponse;
 
       const parts: string[] = [];
@@ -354,7 +391,7 @@ const DesktopSessionsPage: React.FC = () => {
       }
 
       setSelected({});
-      await load();
+      await loadPoolScoped(base, selectedPool);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -381,14 +418,14 @@ const DesktopSessionsPage: React.FC = () => {
     }
     const next: Record<string, boolean> = {};
     sessions.forEach((s) => {
-      const name = s.metadata?.name;
+      const name = sessionName(s);
       if (name) next[name] = true;
     });
     setSelectedSessions(next);
   };
 
   const saveGuacamoleConfig = async () => {
-    if (!config || !guacamoleForm) return;
+    if (!config || !guacamoleForm || !selectedPool) return;
     const replicas = Number(guacamoleForm.replicas);
     const guacdReplicas = Number(guacamoleForm.guacdReplicas);
     if (!Number.isInteger(replicas) || replicas < 1) {
@@ -404,7 +441,8 @@ const DesktopSessionsPage: React.FC = () => {
     setError(null);
     setMessage(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
+      const qs = poolQuery(selectedPool);
       const body: Record<string, unknown> = {
         replicas,
         guacdReplicas,
@@ -419,7 +457,7 @@ const DesktopSessionsPage: React.FC = () => {
           extensionPriority: guacamoleForm.extensionPriority,
         };
       }
-      const updated = (await consoleFetchJSON.put(`${base}/guacamole`, body)) as GuacamoleStatus;
+      const updated = (await consoleFetchJSON.put(`${base}/guacamole${qs}`, body)) as GuacamoleStatus;
       setGuacamole(updated);
       applyGuacamoleToForm(updated);
       setMessage('Guacamole configuration saved.');
@@ -431,7 +469,7 @@ const DesktopSessionsPage: React.FC = () => {
   };
 
   const savePoolConfig = async () => {
-    if (!config || !poolForm) return;
+    if (!config || !poolForm || !selectedPool) return;
     const replicas = Number(poolForm.replicas);
     const minReady = Number(poolForm.minReady);
     const idleSeconds = Number(poolForm.idleSeconds);
@@ -466,8 +504,9 @@ const DesktopSessionsPage: React.FC = () => {
     setError(null);
     setMessage(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
-      const updated = (await consoleFetchJSON.put(`${base}/pool`, {
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
+      const qs = poolQuery(selectedPool);
+      const updated = (await consoleFetchJSON.put(`${base}/pool${qs}`, {
         replicas,
         minReady,
         recyclePolicy: poolForm.recyclePolicy,
@@ -493,15 +532,15 @@ const DesktopSessionsPage: React.FC = () => {
   };
 
   const wakePool = async () => {
-    if (!config) return;
+    if (!config || !selectedPool) return;
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
-      await consoleFetchJSON.post(`${base}/pool/wake`, {});
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
+      await consoleFetchJSON.post(`${base}/pool/wake${poolQuery(selectedPool)}`, {});
       setMessage('Wake requested — stopped desktops will boot shortly.');
-      await load();
+      await loadPoolScoped(base, selectedPool);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -510,7 +549,7 @@ const DesktopSessionsPage: React.FC = () => {
   };
 
   const suspendPool = async () => {
-    if (!config) return;
+    if (!config || !selectedPool) return;
     const confirmed = window.confirm(
       'Suspend idle Available desktops now? Allocated sessions are never stopped. minReady warm desktops are kept running.',
     );
@@ -519,10 +558,10 @@ const DesktopSessionsPage: React.FC = () => {
     setError(null);
     setMessage(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
-      await consoleFetchJSON.post(`${base}/pool/suspend`, {});
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
+      await consoleFetchJSON.post(`${base}/pool/suspend${poolQuery(selectedPool)}`, {});
       setMessage('Suspend requested — idle Available desktops will power off.');
-      await load();
+      await loadPoolScoped(base, selectedPool);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -531,7 +570,7 @@ const DesktopSessionsPage: React.FC = () => {
   };
 
   const deleteSessions = async () => {
-    if (!config || selectedSessionNames.length === 0) return;
+    if (!config || selectedSessionNames.length === 0 || !selectedPool) return;
     const confirmed = window.confirm(
       `Delete ${selectedSessionNames.length} DesktopSession(s)? Assigned desktops will be released according to the pool recycle policy.`,
     );
@@ -541,7 +580,7 @@ const DesktopSessionsPage: React.FC = () => {
     setError(null);
     setMessage(null);
     try {
-      const base = proxyBase(config.pluginName || 'guacamole-desktop-portal');
+      const base = proxyBase(config.pluginName || RUNTIME_PLUGIN_NAME);
       const resp = (await consoleFetchJSON.post(`${base}/sessions/batch-delete`, {
         names: selectedSessionNames,
       })) as BatchResponse;
@@ -561,7 +600,7 @@ const DesktopSessionsPage: React.FC = () => {
       }
 
       setSelectedSessions({});
-      await load();
+      await loadPoolScoped(base, selectedPool);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -587,13 +626,40 @@ const DesktopSessionsPage: React.FC = () => {
       <PageSection>
         <Title headingLevel="h1">{config?.displayName || 'Desktop Sessions'}</Title>
         <p>
-          Allocate desktops from pool <strong>{config?.poolName}</strong> in namespace{' '}
-          <strong>{config?.sessionNamespace}</strong> for one or more Keycloak users.
+          Select a Desktop Pool in namespace <strong>{config?.poolNamespace || config?.sessionNamespace}</strong>,
+          then allocate sessions for Keycloak users.
         </p>
+        <Form style={{ maxWidth: 480, marginTop: 16 }}>
+          <FormGroup label="Desktop Pool" fieldId="selected-pool">
+            <select
+              id="selected-pool"
+              value={selectedPool}
+              disabled={busy || pools.length === 0}
+              onChange={(e) => {
+                setSelectedPool(e.target.value);
+                setMessage(null);
+                setError(null);
+              }}
+              style={{ width: '100%', padding: '6px 8px' }}
+            >
+              {pools.length === 0 ? (
+                <option value="">No DesktopPools found</option>
+              ) : (
+                pools.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                    {p.phase ? ` (${p.phase})` : ''}
+                    {` — avail ${p.available}/${p.desired}`}
+                  </option>
+                ))
+              )}
+            </select>
+          </FormGroup>
+        </Form>
       </PageSection>
       {pool && poolForm && (
         <PageSection>
-          <Title headingLevel="h2">Desktop Pool</Title>
+          <Title headingLevel="h2">Desktop Pool: {selectedPool}</Title>
           <p style={{ marginBottom: 8 }}>
             Phase <strong>{pool.phase || '—'}</strong>
             {' · '}

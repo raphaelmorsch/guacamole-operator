@@ -59,6 +59,17 @@ type DesktopPortalSpec struct {
 	// +optional
 	NavSection string `json:"navSection,omitempty"`
 
+	// PluginName overrides the OpenShift ConsolePlugin resource name.
+	// Must be unique cluster-wide. Defaults to guac-dp-{namespace}-{name}.
+	// Set explicitly (e.g. guacamole-desktop-portal) to preserve an existing Console bookmark/path on upgrade.
+	// +optional
+	PluginName string `json:"pluginName,omitempty"`
+
+	// ConsolePath overrides the in-console route path (must start with /).
+	// Must be unique cluster-wide. Defaults to /guacamole-desktops-{namespace}-{name}.
+	// +optional
+	ConsolePath string `json:"consolePath,omitempty"`
+
 	// Replicas for plugin and API deployments.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1

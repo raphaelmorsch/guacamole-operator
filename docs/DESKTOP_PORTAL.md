@@ -265,6 +265,40 @@ OpenShift Console ──► Console plugin ──► portal-api (OpenShift UserT
 
 ---
 
+## Multiple DesktopPortals
+
+You can run several `DesktopPortal` CRs in the same cluster (typically one per tenant namespace).
+
+Each portal gets a unique:
+
+| Identity | Default | Override |
+|---|---|---|
+| ConsolePlugin name | `guac-dp-{namespace}-{name}` | `spec.pluginName` |
+| Console path / nav | `/guacamole-desktops-{namespace}-{name}` | `spec.consolePath` |
+| ClusterRole (TokenReview/SAR) | `{namespace}-{name}-portal-authreview` | (derived) |
+| DesktopSession names | `ds-{portalNS}-{portalName}-{subject}` | `sessionName` on create |
+| Session labels | `desktop.guacamole.io/portal` + `portal-namespace` | (set by portal-api) |
+
+### Recommendations
+
+1. Prefer **one portal per namespace**, with its own `defaultPool` and `sessionNamespace`.
+2. Use a **distinct Keycloak public client** (and redirect URI) per `userPortal` Route.
+3. To keep an existing Console bookmark after upgrade, pin the old identity:
+
+```yaml
+spec:
+  pluginName: guacamole-desktop-portal
+  consolePath: /guacamole-desktops
+```
+
+Only one portal in the cluster may use those values.
+
+4. Sessions created before multi-portal support lack portal labels and will not appear in the filtered portal UI; recreate them from the portal if needed.
+
+See also [`config/samples/guacamole_v1alpha1_desktopportal_second.yaml`](../config/samples/guacamole_v1alpha1_desktopportal_second.yaml).
+
+---
+
 ## Sample file
 
 See [`config/samples/guacamole_v1alpha1_desktopportal.yaml`](../config/samples/guacamole_v1alpha1_desktopportal.yaml).

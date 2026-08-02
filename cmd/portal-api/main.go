@@ -41,10 +41,18 @@ import (
 
 type configResponse struct {
 	DisplayName      string `json:"displayName"`
+	PortalName       string `json:"portalName"`
+	PortalNamespace  string `json:"portalNamespace"`
 	SessionNamespace string `json:"sessionNamespace"`
 	PoolName         string `json:"poolName"`
 	PoolNamespace    string `json:"poolNamespace"`
 	PluginName       string `json:"pluginName"`
+}
+
+// desktopPortalRef identifies which DesktopPortal CR owns this portal-api instance.
+type desktopPortalRef struct {
+	Name      string
+	Namespace string
 }
 
 type keycloakUser struct {
@@ -60,6 +68,10 @@ type createSessionRequest struct {
 	Subject     string `json:"subject"`
 	PoolName    string `json:"poolName,omitempty"`
 	SessionName string `json:"sessionName,omitempty"`
+}
+
+type createMineSessionRequest struct {
+	PoolName string `json:"poolName,omitempty"`
 }
 
 type createBatchSessionRequest struct {
@@ -103,22 +115,22 @@ type poolSessionLifecycleView struct {
 }
 
 type poolStatusResponse struct {
-	Name              string                     `json:"name"`
-	Namespace         string                     `json:"namespace"`
-	Phase             string                     `json:"phase,omitempty"`
-	Desired           int64                      `json:"desired"`
-	Available         int64                      `json:"available"`
-	Allocated         int64                      `json:"allocated"`
-	Stopped           int64                      `json:"stopped"`
-	Provisioning      int64                      `json:"provisioning"`
-	Failed            int64                      `json:"failed"`
-	Replicas          int32                      `json:"replicas"`
-	MinReady          int32                      `json:"minReady"`
-	RecyclePolicy     string                     `json:"recyclePolicy"`
-	CreateConnections bool                       `json:"createConnections"`
-	PowerManagement   poolPowerManagementView    `json:"powerManagement"`
-	SessionLifecycle  poolSessionLifecycleView   `json:"sessionLifecycle"`
-	Desktops          []poolDesktopView          `json:"desktops,omitempty"`
+	Name              string                   `json:"name"`
+	Namespace         string                   `json:"namespace"`
+	Phase             string                   `json:"phase,omitempty"`
+	Desired           int64                    `json:"desired"`
+	Available         int64                    `json:"available"`
+	Allocated         int64                    `json:"allocated"`
+	Stopped           int64                    `json:"stopped"`
+	Provisioning      int64                    `json:"provisioning"`
+	Failed            int64                    `json:"failed"`
+	Replicas          int32                    `json:"replicas"`
+	MinReady          int32                    `json:"minReady"`
+	RecyclePolicy     string                   `json:"recyclePolicy"`
+	CreateConnections bool                     `json:"createConnections"`
+	PowerManagement   poolPowerManagementView  `json:"powerManagement"`
+	SessionLifecycle  poolSessionLifecycleView `json:"sessionLifecycle"`
+	Desktops          []poolDesktopView        `json:"desktops,omitempty"`
 }
 
 // poolConfigUpdate is the subset of DesktopPoolSpec editable from the portal.
@@ -176,13 +188,17 @@ type guacamoleConfigUpdate struct {
 
 func main() {
 	addr := envOr("LISTEN_ADDR", ":8080")
+	sessionNS := mustEnv("SESSION_NAMESPACE")
 	cfg := configResponse{
 		DisplayName:      envOr("DISPLAY_NAME", "Desktop Sessions"),
-		SessionNamespace: mustEnv("SESSION_NAMESPACE"),
+		PortalName:       envOr("PORTAL_NAME", "desktop-portal"),
+		PortalNamespace:  envOr("PORTAL_NAMESPACE", sessionNS),
+		SessionNamespace: sessionNS,
 		PoolName:         mustEnv("POOL_NAME"),
-		PoolNamespace:    envOr("POOL_NAMESPACE", mustEnv("SESSION_NAMESPACE")),
+		PoolNamespace:    envOr("POOL_NAMESPACE", sessionNS),
 		PluginName:       envOr("PLUGIN_NAME", "guacamole-desktop-portal"),
 	}
+	portal := desktopPortalRef{Name: cfg.PortalName, Namespace: cfg.PortalNamespace}
 
 	kcURL := strings.TrimRight(mustEnv("KEYCLOAK_URL"), "/")
 	kcRealm := mustEnv("KEYCLOAK_REALM")
@@ -303,10 +319,24 @@ func main() {
 		}
 		writeJSON(w, users)
 	}))
+	// Authenticated users (admin Console + self-service) can list pools to pick one.
+	mux.HandleFunc("/pools", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		list, err := listPools(r.Context(), dyn, poolsGVR, cfg.PoolNamespace)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, list)
+	})
 	mux.HandleFunc("/pool", func(w http.ResponseWriter, r *http.Request) {
+		poolName := resolvePoolName(r, cfg.PoolName)
 		switch r.Method {
 		case http.MethodGet:
-			view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName)
+			view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, poolName)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -319,11 +349,11 @@ func main() {
 					http.Error(w, "invalid JSON body", http.StatusBadRequest)
 					return
 				}
-				if err := updatePoolConfig(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
+				if err := updatePoolConfig(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, poolName, req); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName)
+				view, err := getPoolStatus(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, poolName)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
@@ -335,9 +365,10 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/guacamole", func(w http.ResponseWriter, r *http.Request) {
+		poolName := resolvePoolName(r, cfg.PoolName)
 		switch r.Method {
 		case http.MethodGet:
-			view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName)
+			view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, poolName)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -350,11 +381,11 @@ func main() {
 					http.Error(w, "invalid JSON body", http.StatusBadRequest)
 					return
 				}
-				if err := updateGuacamoleConfig(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName, req); err != nil {
+				if err := updateGuacamoleConfig(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, poolName, req); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, cfg.PoolName)
+				view, err := getGuacamoleStatus(r.Context(), dyn, poolsGVR, guacamolesGVR, cfg.PoolNamespace, poolName)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
@@ -370,22 +401,24 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := setPoolPowerRequest(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, "wake"); err != nil {
+		poolName := resolvePoolName(r, cfg.PoolName)
+		if err := setPoolPowerRequest(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, poolName, "wake"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]string{"status": "accepted", "action": "wake"})
+		writeJSON(w, map[string]string{"status": "accepted", "action": "wake", "poolName": poolName})
 	}))
 	mux.HandleFunc("/pool/suspend", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := setPoolPowerRequest(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, cfg.PoolName, "suspend"); err != nil {
+		poolName := resolvePoolName(r, cfg.PoolName)
+		if err := setPoolPowerRequest(r.Context(), dyn, poolsGVR, cfg.PoolNamespace, poolName, "suspend"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]string{"status": "accepted", "action": "suspend"})
+		writeJSON(w, map[string]string{"status": "accepted", "action": "suspend", "poolName": poolName})
 	}))
 	mux.HandleFunc("/sessions/mine", func(w http.ResponseWriter, r *http.Request) {
 		id := identityFromContext(r.Context())
@@ -396,7 +429,10 @@ func main() {
 		}
 		switch r.Method {
 		case http.MethodGet:
-			list, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).List(r.Context(), metav1.ListOptions{})
+			poolFilter := strings.TrimSpace(r.URL.Query().Get("poolName"))
+			list, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).List(r.Context(), metav1.ListOptions{
+				LabelSelector: portalSessionLabelSelector(portal),
+			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -407,6 +443,9 @@ func main() {
 				if sessionRequesterSubject(item) != subject {
 					continue
 				}
+				if poolFilter != "" && sessionPoolRefName(item) != poolFilter {
+					continue
+				}
 				out = append(out, enrichSession(
 					r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
 					cfg.PoolNamespace, cfg.PoolName, item,
@@ -414,8 +453,16 @@ func main() {
 			}
 			writeJSON(w, out)
 		case http.MethodPost:
+			var req createMineSessionRequest
+			if r.Body != nil {
+				_ = json.NewDecoder(r.Body).Decode(&req)
+			}
+			poolName := strings.TrimSpace(req.PoolName)
+			if poolName == "" {
+				poolName = resolvePoolName(r, cfg.PoolName)
+			}
 			// Reclaim Released session with the same name so users can request again.
-			nameHint := sanitizeName(fmt.Sprintf("desktop-session-%s", subject))
+			nameHint := portalSessionName(portal, subject, poolName)
 			if existing, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).Get(r.Context(), nameHint, metav1.GetOptions{}); err == nil {
 				phase, _, _ := unstructured.NestedString(existing.Object, "status", "phase")
 				if phase == "Released" || phase == "Failed" {
@@ -423,14 +470,14 @@ func main() {
 				} else if sessionRequesterSubject(existing) == subject {
 					writeJSON(w, enrichSession(
 						r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
-						cfg.PoolNamespace, cfg.PoolName, existing,
+						cfg.PoolNamespace, poolName, existing,
 					))
 					return
 				}
 			}
 			created, _, err := createDesktopSession(
 				r.Context(), dyn, sessionsGVR, poolsGVR,
-				cfg.SessionNamespace, cfg.PoolNamespace, cfg.PoolName, subject, "",
+				cfg.SessionNamespace, cfg.PoolNamespace, poolName, subject, "", portal,
 			)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
@@ -438,7 +485,7 @@ func main() {
 			}
 			writeJSON(w, enrichSession(
 				r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
-				cfg.PoolNamespace, cfg.PoolName, created,
+				cfg.PoolNamespace, poolName, created,
 			))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -506,15 +553,15 @@ func main() {
 			http.Error(w, "subjects is required", http.StatusBadRequest)
 			return
 		}
-		poolName := req.PoolName
+		poolName := strings.TrimSpace(req.PoolName)
 		if poolName == "" {
-			poolName = cfg.PoolName
+			poolName = resolvePoolName(r, cfg.PoolName)
 		}
 		results := make([]batchSessionResult, 0, len(subjects))
 		for _, subject := range subjects {
 			created, name, err := createDesktopSession(
 				r.Context(), dyn, sessionsGVR, poolsGVR,
-				cfg.SessionNamespace, cfg.PoolNamespace, poolName, subject, "",
+				cfg.SessionNamespace, cfg.PoolNamespace, poolName, subject, "", portal,
 			)
 			if err != nil {
 				status := "error"
@@ -583,16 +630,20 @@ func main() {
 	mux.HandleFunc("/sessions", authn.requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			list, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).List(r.Context(), metav1.ListOptions{})
+			poolName := resolvePoolName(r, cfg.PoolName)
+			list, err := dyn.Resource(sessionsGVR).Namespace(cfg.SessionNamespace).List(r.Context(), metav1.ListOptions{
+				LabelSelector: portalSessionLabelSelector(portal),
+			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			out := make([]sessionView, 0, len(list.Items))
-			for i := range list.Items {
+			filtered := filterSessionsByPool(list.Items, poolName)
+			out := make([]sessionView, 0, len(filtered))
+			for i := range filtered {
 				out = append(out, enrichSession(
 					r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
-					cfg.PoolNamespace, cfg.PoolName, &list.Items[i],
+					cfg.PoolNamespace, poolName, &filtered[i],
 				))
 			}
 			writeJSON(w, out)
@@ -607,13 +658,13 @@ func main() {
 				http.Error(w, "subject is required", http.StatusBadRequest)
 				return
 			}
-			poolName := req.PoolName
+			poolName := strings.TrimSpace(req.PoolName)
 			if poolName == "" {
-				poolName = cfg.PoolName
+				poolName = resolvePoolName(r, cfg.PoolName)
 			}
 			created, _, err := createDesktopSession(
 				r.Context(), dyn, sessionsGVR, poolsGVR,
-				cfg.SessionNamespace, cfg.PoolNamespace, poolName, req.Subject, req.SessionName,
+				cfg.SessionNamespace, cfg.PoolNamespace, poolName, req.Subject, req.SessionName, portal,
 			)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
@@ -621,7 +672,7 @@ func main() {
 			}
 			writeJSON(w, enrichSession(
 				r.Context(), dyn, connectionsGVR, poolsGVR, guacamolesGVR,
-				cfg.PoolNamespace, cfg.PoolName, created,
+				cfg.PoolNamespace, poolName, created,
 			))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -681,6 +732,59 @@ func main() {
 		}()
 	}
 	log.Fatal(<-errCh)
+}
+
+// resolvePoolName returns ?poolName= from the request, or the portal default.
+func resolvePoolName(r *http.Request, defaultName string) string {
+	if r == nil {
+		return defaultName
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("poolName"))
+	if name == "" {
+		return defaultName
+	}
+	return name
+}
+
+func sessionPoolRefName(obj *unstructured.Unstructured) string {
+	name, _, _ := unstructured.NestedString(obj.Object, "spec", "poolRef", "name")
+	return name
+}
+
+func filterSessionsByPool(items []unstructured.Unstructured, poolName string) []unstructured.Unstructured {
+	if poolName == "" {
+		return items
+	}
+	out := make([]unstructured.Unstructured, 0, len(items))
+	for i := range items {
+		if sessionPoolRefName(&items[i]) == poolName {
+			out = append(out, items[i])
+		}
+	}
+	return out
+}
+
+func listPools(
+	ctx context.Context,
+	dyn dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespace string,
+) ([]poolStatusResponse, error) {
+	list, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]poolStatusResponse, 0, len(list.Items))
+	for i := range list.Items {
+		view, err := getPoolStatus(ctx, dyn, gvr, namespace, list.Items[i].GetName())
+		if err != nil {
+			continue
+		}
+		// List endpoint omits per-desktop details to keep the payload light.
+		view.Desktops = nil
+		out = append(out, *view)
+	}
+	return out, nil
 }
 
 func getPoolStatus(
@@ -1082,11 +1186,27 @@ func asInt64Default(v interface{}, def int64) int64 {
 	return def
 }
 
+func portalSessionName(portal desktopPortalRef, subject, poolName string) string {
+	if poolName == "" {
+		return sanitizeName(fmt.Sprintf("ds-%s-%s-%s", portal.Namespace, portal.Name, subject))
+	}
+	return sanitizeName(fmt.Sprintf("ds-%s-%s-%s-%s", portal.Namespace, portal.Name, poolName, subject))
+}
+
+func portalSessionLabelSelector(portal desktopPortalRef) string {
+	return fmt.Sprintf(
+		"desktop.guacamole.io/portal=%s,desktop.guacamole.io/portal-namespace=%s",
+		sanitizeLabel(portal.Name),
+		sanitizeLabel(portal.Namespace),
+	)
+}
+
 func createDesktopSession(
 	ctx context.Context,
 	dyn dynamic.Interface,
 	sessionsGVR, poolsGVR schema.GroupVersionResource,
 	sessionNamespace, poolNamespace, poolName, subject, sessionName string,
+	portal desktopPortalRef,
 ) (*unstructured.Unstructured, string, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
@@ -1094,7 +1214,7 @@ func createDesktopSession(
 	}
 	name := strings.TrimSpace(sessionName)
 	if name == "" {
-		name = sanitizeName(fmt.Sprintf("desktop-session-%s", subject))
+		name = portalSessionName(portal, subject, poolName)
 	}
 	spec := map[string]interface{}{
 		"poolRef": map[string]interface{}{
@@ -1124,8 +1244,10 @@ func createDesktopSession(
 				"name":      name,
 				"namespace": sessionNamespace,
 				"labels": map[string]interface{}{
-					"desktop.guacamole.io/managed-by": "desktop-portal",
-					"desktop.guacamole.io/requester":  sanitizeLabel(subject),
+					"desktop.guacamole.io/managed-by":       "desktop-portal",
+					"desktop.guacamole.io/portal":           sanitizeLabel(portal.Name),
+					"desktop.guacamole.io/portal-namespace": sanitizeLabel(portal.Namespace),
+					"desktop.guacamole.io/requester":        sanitizeLabel(subject),
 				},
 			},
 			"spec": spec,

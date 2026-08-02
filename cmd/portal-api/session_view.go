@@ -37,6 +37,7 @@ type sessionView struct {
 	Name              string                 `json:"name"`
 	Namespace         string                 `json:"namespace"`
 	Subject           string                 `json:"subject,omitempty"`
+	PoolName          string                 `json:"poolName,omitempty"`
 	Phase             string                 `json:"phase,omitempty"`
 	UxPhase           string                 `json:"uxPhase,omitempty"`
 	ConnectionState   string                 `json:"connectionState,omitempty"`
@@ -109,11 +110,13 @@ func buildSessionView(
 		connName = obj.GetName()
 	}
 	msg := asString(status["message"])
+	poolName, _, _ := unstructured.NestedString(obj.Object, "spec", "poolRef", "name")
 	view := sessionView{
 		Object:            obj.Object,
 		Name:              obj.GetName(),
 		Namespace:         obj.GetNamespace(),
 		Subject:           sessionRequesterSubject(obj),
+		PoolName:          poolName,
 		Phase:             phase,
 		UxPhase:           mapUxPhase(phase, connState, desktop),
 		ConnectionState:   connState,
@@ -161,16 +164,33 @@ func getConnectionID(
 	return v, nil
 }
 
+func sessionPoolRef(obj *unstructured.Unstructured, fallbackNS, fallbackName string) (namespace, name string) {
+	name, _, _ = unstructured.NestedString(obj.Object, "spec", "poolRef", "name")
+	if name == "" {
+		name = fallbackName
+	}
+	// DesktopSession.poolRef is namespaced-local; resolve Guacamole via pool in the session namespace
+	// (or the portal default pool namespace when the session has no poolRef yet).
+	namespace = obj.GetNamespace()
+	if namespace == "" {
+		namespace = fallbackNS
+	}
+	return namespace, name
+}
+
 func enrichSession(
 	ctx context.Context,
 	dyn dynamic.Interface,
 	connectionsGVR, poolsGVR, guacamolesGVR schema.GroupVersionResource,
-	poolNamespace, poolName string,
+	fallbackPoolNamespace, fallbackPoolName string,
 	obj *unstructured.Unstructured,
 ) sessionView {
+	poolNS, poolName := sessionPoolRef(obj, fallbackPoolNamespace, fallbackPoolName)
 	routeURL := ""
-	if view, err := getGuacamoleStatus(ctx, dyn, poolsGVR, guacamolesGVR, poolNamespace, poolName); err == nil && view != nil {
-		routeURL = view.RouteURL
+	if poolName != "" {
+		if view, err := getGuacamoleStatus(ctx, dyn, poolsGVR, guacamolesGVR, poolNS, poolName); err == nil && view != nil {
+			routeURL = view.RouteURL
+		}
 	}
 	connName, _, _ := unstructured.NestedString(obj.Object, "status", "connectionName")
 	if connName == "" {

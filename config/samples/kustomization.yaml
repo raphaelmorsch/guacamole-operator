@@ -5,4 +5,6 @@ resources:
 - guacamole_v1alpha1_desktoppool.yaml
 - guacamole_v1alpha1_desktopsession.yaml
 - guacamole_v1alpha1_desktopportal.yaml
+# Optional second-portal example (different namespace) — apply manually when testing multi-portal:
+# - guacamole_v1alpha1_desktopportal_second.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

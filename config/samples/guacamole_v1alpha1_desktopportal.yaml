@@ -14,6 +14,10 @@ spec:
   sessionNamespace: guacamole-desktops
   enablePlugin: true
   navSection: home
+  # Optional: pin Console identity (unique cluster-wide). Defaults are derived from
+  # namespace/name so multiple DesktopPortals can coexist.
+  # pluginName: guacamole-desktop-portal
+  # consolePath: /guacamole-desktops
   # Self-service PatternFly UI outside the Console (Route + Keycloak OIDC PKCE).
   userPortal:
     enabled: true

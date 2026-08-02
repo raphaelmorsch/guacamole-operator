@@ -10,8 +10,10 @@ FROM registry.access.redhat.com/ubi9/nginx-124:latest
 USER 0
 COPY --from=build /opt/app-root/src/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf
+COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chown -R 1001:0 /usr/share/nginx/html /etc/nginx/nginx.conf && \
-    chmod -R g+rwX /usr/share/nginx/html
+    chmod -R g+rwX /usr/share/nginx/html && \
+    chmod 755 /docker-entrypoint.sh
 USER 1001
 EXPOSE 9443
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/docker-entrypoint.sh"]

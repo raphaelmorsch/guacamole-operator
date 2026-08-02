@@ -119,8 +119,9 @@ func (r *DesktopPortalReconciler) ensureAuthReviewClusterRBAC(ctx context.Contex
 		if cr.Labels == nil {
 			cr.Labels = map[string]string{}
 		}
-		cr.Labels["app.kubernetes.io/managed-by"] = "guacamole-operator"
-		cr.Labels["desktop.guacamole.io/portal"] = portal.Name
+		for k, v := range portalOwnerLabels(portal) {
+			cr.Labels[k] = v
+		}
 		cr.Rules = []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{"authentication.k8s.io"},
@@ -145,8 +146,9 @@ func (r *DesktopPortalReconciler) ensureAuthReviewClusterRBAC(ctx context.Contex
 		if crb.Labels == nil {
 			crb.Labels = map[string]string{}
 		}
-		crb.Labels["app.kubernetes.io/managed-by"] = "guacamole-operator"
-		crb.Labels["desktop.guacamole.io/portal"] = portal.Name
+		for k, v := range portalOwnerLabels(portal) {
+			crb.Labels[k] = v
+		}
 		crb.RoleRef = rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "ClusterRole",

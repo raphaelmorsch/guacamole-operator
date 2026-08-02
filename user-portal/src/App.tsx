@@ -8,6 +8,8 @@ import {
   EmptyStateBody,
   EmptyStateHeader,
   EmptyStateIcon,
+  Form,
+  FormGroup,
   Label,
   Page,
   PageSection,
@@ -29,10 +31,20 @@ type MeResponse = {
   groups?: string[];
 };
 
+type PoolSummary = {
+  name: string;
+  namespace: string;
+  phase?: string;
+  desired: number;
+  available: number;
+  allocated: number;
+};
+
 type SessionView = {
   name: string;
   namespace: string;
   subject?: string;
+  poolName?: string;
   phase?: string;
   uxPhase?: string;
   connectionState?: string;
@@ -153,44 +165,86 @@ const activeSession = (sessions: SessionView[]) =>
 
 const App: React.FC = () => {
   const [me, setMe] = React.useState<MeResponse | null>(null);
+  const [pools, setPools] = React.useState<PoolSummary[]>([]);
+  const [selectedPool, setSelectedPool] = React.useState('');
   const [session, setSession] = React.useState<SessionView | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const refresh = React.useCallback(async () => {
+  const refresh = React.useCallback(async (poolName?: string) => {
     setError(null);
     try {
       await ensureKeycloak();
       const meResp = await api<MeResponse>('/api/me');
       setMe(meResp);
-      const sessions = await api<SessionView[]>('/api/sessions/mine');
+
+      let poolList: PoolSummary[] = [];
+      try {
+        poolList = (await api<PoolSummary[]>('/api/pools')) || [];
+      } catch {
+        poolList = [];
+      }
+      setPools(poolList);
+
+      const pool =
+        poolName ||
+        selectedPool ||
+        poolList[0]?.name ||
+        '';
+      if (pool && pool !== selectedPool) {
+        setSelectedPool(pool);
+      }
+      const effectivePool = poolName || selectedPool || poolList[0]?.name || '';
+
+      if (!effectivePool) {
+        setSession(null);
+        return;
+      }
+      const qs = `?poolName=${encodeURIComponent(effectivePool)}`;
+      const sessions = await api<SessionView[]>(`/api/sessions/mine${qs}`);
       setSession(activeSession(sessions));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedPool]);
 
   React.useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // Initial load only; pool changes call refresh explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     if (!session) return;
     if (session.uxPhase === 'Released' || session.uxPhase === 'Failed') return;
     const id = window.setInterval(() => {
-      void refresh();
+      void refresh(selectedPool);
     }, 10000);
     return () => window.clearInterval(id);
-  }, [session, refresh]);
+  }, [session, selectedPool, refresh]);
+
+  const onPoolChange = (name: string) => {
+    setSelectedPool(name);
+    setSession(null);
+    setLoading(true);
+    void refresh(name);
+  };
 
   const requestDesktop = async () => {
+    if (!selectedPool) {
+      setError('Selecione um Desktop Pool');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const created = await api<SessionView>('/api/sessions/mine', { method: 'POST', body: '{}' });
+      const created = await api<SessionView>('/api/sessions/mine', {
+        method: 'POST',
+        body: JSON.stringify({ poolName: selectedPool }),
+      });
       setSession(created);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -208,7 +262,7 @@ const App: React.FC = () => {
     try {
       await api(`/api/sessions/mine/${encodeURIComponent(session.name)}`, { method: 'DELETE' });
       setSession(null);
-      await refresh();
+      await refresh(selectedPool);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -262,6 +316,31 @@ const App: React.FC = () => {
             {error}
           </Alert>
         ) : null}
+
+        <Form style={{ maxWidth: 480, marginBottom: 24 }}>
+          <FormGroup label="Desktop Pool" fieldId="user-selected-pool">
+            <select
+              id="user-selected-pool"
+              value={selectedPool}
+              disabled={busy || loading || pools.length === 0}
+              onChange={(e) => onPoolChange(e.target.value)}
+              style={{ width: '100%', padding: '6px 8px' }}
+            >
+              {pools.length === 0 ? (
+                <option value="">Nenhum pool disponível</option>
+              ) : (
+                pools.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                    {p.phase ? ` (${p.phase})` : ''}
+                    {` — disponíveis ${p.available}/${p.desired}`}
+                  </option>
+                ))
+              )}
+            </select>
+          </FormGroup>
+        </Form>
+
         {loading ? (
           <Bullseye>
             <Spinner />
@@ -269,19 +348,28 @@ const App: React.FC = () => {
         ) : !session ? (
           <EmptyState>
             <EmptyStateHeader
-              titleText="Nenhum desktop ativo"
+              titleText="Nenhum desktop ativo neste pool"
               headingLevel="h2"
               icon={<EmptyStateIcon icon={DesktopIcon} />}
             />
             <EmptyStateBody>
-              Peça um desktop do pool. Quando estiver pronto, você poderá conectar pelo Guacamole.
+              {selectedPool
+                ? `Peça um desktop do pool ${selectedPool}. Quando estiver pronto, você poderá conectar pelo Guacamole.`
+                : 'Selecione um Desktop Pool para pedir uma sessão.'}
             </EmptyStateBody>
-            <Button variant="primary" onClick={() => void requestDesktop()} isDisabled={busy}>
+            <Button
+              variant="primary"
+              onClick={() => void requestDesktop()}
+              isDisabled={busy || !selectedPool}
+            >
               Pedir desktop
             </Button>
           </EmptyState>
         ) : (
           <div style={{ maxWidth: 640 }}>
+            <p>
+              Pool: <strong>{session.poolName || selectedPool}</strong>
+            </p>
             <p>
               Status:{' '}
               <Label color={uxVariant(session.uxPhase)}>{uxLabel(session.uxPhase)}</Label>
@@ -312,7 +400,7 @@ const App: React.FC = () => {
               <Button variant="primary" onClick={connect} isDisabled={busy || !canConnect}>
                 {session.uxPhase === 'Disconnected' ? 'Reconectar' : 'Conectar'}
               </Button>
-              <Button variant="secondary" onClick={() => void refresh()} isDisabled={busy}>
+              <Button variant="secondary" onClick={() => void refresh(selectedPool)} isDisabled={busy}>
                 Atualizar
               </Button>
               <Button variant="danger" onClick={() => void releaseDesktop()} isDisabled={busy}>

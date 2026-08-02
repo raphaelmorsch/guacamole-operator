@@ -44,7 +44,6 @@ import (
 
 const (
 	desktopPortalFinalizer = "guacamole.guacamole.io/desktopportal-finalizer"
-	portalPluginName       = "guacamole-desktop-portal"
 	portalAPIPort          = 8080
 	portalAPIHTTPSPort     = 8443
 	portalPluginPort       = 9443
@@ -178,11 +177,29 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.requeueOrFail(ctx, portal, err)
 	}
 
+	// Drop the legacy singleton ConsolePlugin if this portal previously owned it.
+	if names.Plugin != legacyPortalPluginName {
+		_ = r.cleanupLegacyConsolePlugin(ctx, portal, names)
+	}
+	// If plugin identity changed (override / rename), remove the previous ConsolePlugin.
+	if prev := portal.Status.PluginName; prev != "" && prev != names.Plugin && prev != legacyPortalPluginName {
+		_ = r.disableConsolePlugin(ctx, prev)
+		old := &unstructured.Unstructured{}
+		old.SetGroupVersionKind(consolePluginGVK)
+		if err := r.Get(ctx, types.NamespacedName{Name: prev}, old); err == nil {
+			labels := old.GetLabels()
+			if labels["desktop.guacamole.io/portal"] == portal.Name &&
+				labels["desktop.guacamole.io/portal-namespace"] == portal.Namespace {
+				_ = r.Delete(ctx, old)
+			}
+		}
+	}
+
 	portal.Status.Phase = guacamolev1alpha1.DesktopPortalPhaseReady
 	portal.Status.PluginName = names.Plugin
 	portal.Status.PluginService = names.PluginService
 	portal.Status.APIService = names.APIService
-	portal.Status.ConsolePath = "/guacamole-desktops"
+	portal.Status.ConsolePath = names.ConsolePath
 	portal.Status.UserPortalURL = userPortalURL
 	meta.SetStatusCondition(&portal.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
@@ -200,55 +217,15 @@ func (r *DesktopPortalReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
-type portalNames struct {
-	Plugin                      string
-	PluginService               string
-	PluginDeployment            string
-	APIService                  string
-	APIDeployment               string
-	APIServiceAccount           string
-	SessionRole                 string
-	SessionRoleBinding          string
-	GuacamoleRole               string
-	GuacamoleRoleBinding        string
-	UserPortalDeployment        string
-	UserPortalService           string
-	UserPortalRoute             string
-	UserPortalOAuthSA           string
-	UserPortalCookieSecret      string
-	AuthReviewClusterRole       string
-	AuthReviewClusterRoleBinding string
-}
-
-func portalResourceNames(portal *guacamolev1alpha1.DesktopPortal) portalNames {
-	base := fmt.Sprintf("%s-portal", portal.Name)
-	return portalNames{
-		Plugin:                       portalPluginName,
-		PluginService:                base + "-plugin",
-		PluginDeployment:             base + "-plugin",
-		APIService:                   base + "-api",
-		APIDeployment:                base + "-api",
-		APIServiceAccount:            base + "-api",
-		SessionRole:                  base + "-sessions",
-		SessionRoleBinding:           base + "-sessions",
-		GuacamoleRole:                base + "-guacamole",
-		GuacamoleRoleBinding:         base + "-guacamole",
-		UserPortalDeployment:         base + "-user",
-		UserPortalService:            base + "-user",
-		UserPortalRoute:              base + "-user",
-		UserPortalOAuthSA:            base + "-user-oauth",
-		UserPortalCookieSecret:       base + "-user-proxy",
-		AuthReviewClusterRole:        base + "-authreview",
-		AuthReviewClusterRoleBinding: base + "-authreview",
-	}
-}
-
 func (r *DesktopPortalReconciler) validate(portal *guacamolev1alpha1.DesktopPortal) error {
 	if portal.Spec.DefaultPool.Name == "" {
 		return fmt.Errorf("spec.defaultPool.name is required")
 	}
 	if portal.Spec.Keycloak.URL == "" || portal.Spec.Keycloak.Realm == "" || portal.Spec.Keycloak.ClientID == "" {
 		return fmt.Errorf("spec.keycloak.url, realm and clientID are required")
+	}
+	if p := strings.TrimSpace(portal.Spec.ConsolePath); p != "" && !strings.HasPrefix(p, "/") {
+		return fmt.Errorf("spec.consolePath must start with /")
 	}
 	return nil
 }
@@ -279,14 +256,32 @@ func (r *DesktopPortalReconciler) finalize(ctx context.Context, portal *guacamol
 	_ = r.deleteUserPortalResources(ctx, portal, names)
 	_ = r.Delete(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: names.AuthReviewClusterRoleBinding}})
 	_ = r.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: names.AuthReviewClusterRole}})
-	_ = r.Delete(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: names.UserPortalOAuthSA + "-auth-delegator"}})
-	if ptr.Deref(portal.Spec.EnablePlugin, true) {
-		_ = r.disableConsolePlugin(ctx, names.Plugin)
+	// Pre-multi-portal ClusterRole names omitted the namespace.
+	legacyAuth := fmt.Sprintf("%s-portal-authreview", portal.Name)
+	if legacyAuth != names.AuthReviewClusterRole {
+		_ = r.Delete(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: legacyAuth}})
+		_ = r.Delete(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: legacyAuth}})
 	}
-	cp := &unstructured.Unstructured{}
-	cp.SetGroupVersionKind(consolePluginGVK)
-	if err := r.Get(ctx, types.NamespacedName{Name: names.Plugin}, cp); err == nil {
-		_ = r.Delete(ctx, cp)
+	_ = r.Delete(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: names.UserPortalOAuthSA + "-auth-delegator"}})
+	pluginNames := []string{names.Plugin}
+	if portal.Status.PluginName != "" && portal.Status.PluginName != names.Plugin {
+		pluginNames = append(pluginNames, portal.Status.PluginName)
+	}
+	if names.Plugin != legacyPortalPluginName {
+		pluginNames = append(pluginNames, legacyPortalPluginName)
+	}
+	for _, pluginName := range uniqueStrings(pluginNames) {
+		if ptr.Deref(portal.Spec.EnablePlugin, true) {
+			_ = r.disableConsolePlugin(ctx, pluginName)
+		}
+		cp := &unstructured.Unstructured{}
+		cp.SetGroupVersionKind(consolePluginGVK)
+		if err := r.Get(ctx, types.NamespacedName{Name: pluginName}, cp); err == nil {
+			if pluginName == legacyPortalPluginName && !consolePluginOwnedBy(cp, portal, names) {
+				continue
+			}
+			_ = r.Delete(ctx, cp)
+		}
 	}
 
 	sessionNS := portal.Spec.SessionNamespace
@@ -540,6 +535,8 @@ func (r *DesktopPortalReconciler) ensureAPIDeployment(
 				{Name: "TLS_CERT_FILE", Value: "/var/serving-cert/tls.crt"},
 				{Name: "TLS_KEY_FILE", Value: "/var/serving-cert/tls.key"},
 				{Name: "DISPLAY_NAME", Value: display},
+				{Name: "PORTAL_NAME", Value: portal.Name},
+				{Name: "PORTAL_NAMESPACE", Value: portal.Namespace},
 				{Name: "SESSION_NAMESPACE", Value: sessionNS},
 				{Name: "POOL_NAME", Value: portal.Spec.DefaultPool.Name},
 				{Name: "POOL_NAMESPACE", Value: poolNS},
@@ -620,6 +617,14 @@ func (r *DesktopPortalReconciler) ensurePluginDeployment(ctx context.Context, po
 		return fmt.Errorf("spec.pluginImage (or RELATED_IMAGE_DESKTOP_PORTAL_PLUGIN) is required")
 	}
 	replicas := ptr.Deref(portal.Spec.Replicas, 1)
+	display := portal.Spec.DisplayName
+	if display == "" {
+		display = "Desktop Sessions"
+	}
+	navSection := portal.Spec.NavSection
+	if navSection == "" {
+		navSection = "home"
+	}
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: names.PluginDeployment, Namespace: portal.Namespace},
 	}
@@ -645,6 +650,12 @@ func (r *DesktopPortalReconciler) ensurePluginDeployment(ctx context.Context, po
 			Name:  "plugin",
 			Image: image,
 			Ports: []corev1.ContainerPort{{Name: "https", ContainerPort: portalPluginPort}},
+			Env: []corev1.EnvVar{
+				{Name: "PLUGIN_NAME", Value: names.Plugin},
+				{Name: "CONSOLE_PATH", Value: names.ConsolePath},
+				{Name: "NAV_SECTION", Value: navSection},
+				{Name: "DISPLAY_NAME", Value: display},
+			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "serving-cert", MountPath: "/var/serving-cert"},
 			},
@@ -691,6 +702,14 @@ func (r *DesktopPortalReconciler) ensureConsolePlugin(ctx context.Context, porta
 	cp.SetGroupVersionKind(consolePluginGVK)
 	cp.SetName(names.Plugin)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cp, func() error {
+		labels := cp.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		for k, v := range portalOwnerLabels(portal) {
+			labels[k] = v
+		}
+		cp.SetLabels(labels)
 		_ = unstructured.SetNestedField(cp.Object, display, "spec", "displayName")
 		_ = unstructured.SetNestedMap(cp.Object, map[string]interface{}{
 			"type": "Service",
@@ -718,6 +737,48 @@ func (r *DesktopPortalReconciler) ensureConsolePlugin(ctx context.Context, porta
 		return nil
 	})
 	return err
+}
+
+// cleanupLegacyConsolePlugin removes the old singleton ConsolePlugin when it still points at this portal.
+func (r *DesktopPortalReconciler) cleanupLegacyConsolePlugin(ctx context.Context, portal *guacamolev1alpha1.DesktopPortal, names portalNames) error {
+	cp := &unstructured.Unstructured{}
+	cp.SetGroupVersionKind(consolePluginGVK)
+	if err := r.Get(ctx, types.NamespacedName{Name: legacyPortalPluginName}, cp); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !consolePluginOwnedBy(cp, portal, names) {
+		return nil
+	}
+	_ = r.disableConsolePlugin(ctx, legacyPortalPluginName)
+	return r.Delete(ctx, cp)
+}
+
+func consolePluginOwnedBy(cp *unstructured.Unstructured, portal *guacamolev1alpha1.DesktopPortal, names portalNames) bool {
+	labels := cp.GetLabels()
+	if labels["desktop.guacamole.io/portal"] == portal.Name &&
+		labels["desktop.guacamole.io/portal-namespace"] == portal.Namespace {
+		return true
+	}
+	svcName, _, _ := unstructured.NestedString(cp.Object, "spec", "backend", "service", "name")
+	svcNS, _, _ := unstructured.NestedString(cp.Object, "spec", "backend", "service", "namespace")
+	return svcName == names.PluginService && svcNS == portal.Namespace
+}
+
+func uniqueStrings(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (r *DesktopPortalReconciler) ensureConsoleEnabled(ctx context.Context, pluginName string) error {
