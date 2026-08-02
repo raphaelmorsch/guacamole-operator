@@ -2,17 +2,19 @@
 
 Operator Kubernetes/OpenShift para implantar **Apache Guacamole** de forma declarativa no Red Hat OpenShift. Baseado na implementação de referência [guacamole-rdp](https://github.com/raphaelmorsch/guacamole-rdp).
 
-**Versão estável atual:** `0.0.9`
+**Versão OLM (CSV) atual:** `0.0.16`
+
+> Guia rápido pelo **OpenShift Web Console:** [Instalar o Operator](#instalar-o-guacamole-operator-pelo-web-console) · [Configurar Guacamole](#configurar-o-crd-guacamole-pelo-web-console) · [Configurar DesktopPool](#configurar-o-crd-desktoppool-pelo-web-console) · [Release Notes](#release-notes)
 
 ## Custom Resources
 
 | CRD | Descrição |
 |---|---|
-| `Guacamole` | Provisiona a stack completa (MySQL, guacd, web, Route, HPA, métricas Prometheus) |
+| `Guacamole` | Provisiona a stack completa (MySQL, guacd, web, Route, HPA, métricas Prometheus, OpenID opcional) |
 | `GuacamoleConnection` | Cria conexões RDP/VNC/SSH no banco MySQL da instância |
 | `DesktopPool` | Pool de VMs Windows clonadas de um DataSource golden (OpenShift Virtualization) |
 | `DesktopSession` | Reserva exclusiva de um desktop do pool + `GuacamoleConnection` sob demanda |
-| `DesktopPortal` | Dynamic Plugin no OpenShift Console para alocar DesktopSessions a usuários Keycloak |
+| `DesktopPortal` | Plugin no OpenShift Console + User Portal self-service (Keycloak) para alocar DesktopSessions |
 
 Para cada recurso `Guacamole`, o operator provisiona automaticamente:
 
@@ -131,38 +133,291 @@ spec:
 
 ---
 
-## Histórico de versões
+## Release Notes
 
-| Versão | Principais mudanças |
-|---|---|
-| **0.0.7** | Métricas por conexão — `exposeMetrics` no `GuacamoleConnection` |
-| **0.0.6** | CRD `GuacamoleConnection` — conexões declarativas no MySQL |
-| **0.0.5** | HPA para guacd + Route com path `/guacamole` |
-| **0.0.4** | HPA para Guacamole web + fix do init do schema MySQL |
-| **0.0.3** | Imagens corretas no CSV (`kube-rbac-proxy` v0.18.2, registry OpenShift) |
-| 0.0.1–0.0.2 | Versões iniciais do operator e catálogo OLM |
+### 0.0.16
+
+- **DesktopPortal**: plugin dinâmico no OpenShift Console para listar usuários Keycloak e alocar/liberar `DesktopSession`s em lote
+- **User Portal** self-service (PatternFly + Route) com login Keycloak OIDC (PKCE)
+- Seleção de **Desktop Pool** no Console plugin e no User Portal (status, sessions e allocate no pool escolhido)
+- Suporte a **múltiplos DesktopPortal** (identidade ConsolePlugin/path únicos; override via `spec.pluginName` / `spec.consolePath`)
+- OpenID Connect no CR `Guacamole` (SSO Keycloak na UI do Guacamole)
+- Portal-api com TLS (serving cert), TokenReview/SAR para admins do Console
+- Power management do pool (idle stop / wake) configurável pelo portal
+- Session lifecycle: logoff após idle de disconnect + TTL máximo opcional
+- Fila de broker com prioridade para `DesktopSession`
+- Batch create/delete de sessions no portal
+
+### 0.0.15
+
+- Regeneração do bundle OLM com CRDs DesktopPool / DesktopSession / DesktopPortal
+- Ajustes de publicação no Operator Hub / Software Catalog
+
+### 0.0.12 – 0.0.14
+
+- CRDs **DesktopPool** e **DesktopSession**
+- Clone de VMs a partir de CDI `DataSource` (OpenShift Virtualization)
+- Credenciais RDP gerenciadas (`password` ou `passwordSecretRef`)
+- RBAC automático para clone cross-namespace (golden image)
+- Alocação/liberação de desktop + `GuacamoleConnection` sob demanda
+- Recycle policy `Delete` / `Retain`
+
+### 0.0.7 – 0.0.11
+
+- **0.0.7**: métricas Prometheus por conexão (`exposeMetrics` no `GuacamoleConnection`) + exporter compartilhado
+- Evolução do exporter e relatedImages no CSV
+
+### 0.0.6
+
+- CRD **GuacamoleConnection** — conexões RDP/VNC/SSH declarativas sincronizadas no MySQL
+- Permissões (`READ`, `UPDATE`, `DELETE`, `ADMINISTER`)
+
+### 0.0.5
+
+- HPA para **guacd**
+- Route com path padrão `/guacamole`
+
+### 0.0.4
+
+- HPA para a aplicação web Guacamole
+- Init do schema MySQL confiável (retry + falha explícita)
+
+### 0.0.3
+
+- Imagens corretas no CSV (`kube-rbac-proxy` v0.18.2, registry OpenShift)
+- Correções de ImagePullBackOff em clusters reais
+
+### 0.0.1 – 0.0.2
+
+- Primeira publicação OLM / CatalogSource
+- CRD `Guacamole` (MySQL + guacd + web + Route)
 
 ---
 
 ## Pré-requisitos
 
+### Para instalar e operar pelo Web Console
+
+| Requisito | Observação |
+|---|---|
+| OpenShift 4.x | OLM já incluso |
+| Permissão | `cluster-admin` (ou equivalente) para instalar Operators |
+| CatalogSource | Catálogo do Guacamole Operator publicado no cluster (ver [publicação](#tutorial-completo--do-zero-ao-operator-hub)) |
+| OpenShift Virtualization + CDI | Necessários para **DesktopPool** (clone de VMs) |
+| DataSource golden | Imagem Windows pronta (ex.: `win2k19-guacamole-desktop`) |
+
+### Para build / publicação (desenvolvedores)
+
 | Ferramenta | Versão mínima | Observação |
 |---|---|---|
-| OpenShift | 4.x | Acesso `cluster-admin` para instalar via OLM |
 | `oc` | — | Autenticado no cluster |
 | `go` | 1.21+ | Compilar o operator |
 | `make` | — | Targets do projeto |
-| `podman` | — | Build e push de imagens (use Podman de ponta a ponta) |
+| `podman` | — | Build e push (`--platform linux/amd64` no Apple Silicon) |
 | `operator-sdk` | 1.37+ | Gerar bundle OLM |
-| OLM | — | Já presente em clusters OpenShift |
 
-> **Apple Silicon (M1/M2/M3):** clusters OpenShift usam `amd64`. Sempre build de imagens com `--platform linux/amd64`.
+---
+
+## Instalar o Guacamole Operator pelo Web Console
+
+Pré-condição: o **CatalogSource** do operator já está disponível no cluster (namespace `openshift-marketplace` ou equivalente). Se ainda não publicou o catálogo, siga a [publicação via CLI](#tutorial-completo--do-zero-ao-operator-hub) e depois volte aqui.
+
+1. No OpenShift Web Console, abra o seletor de perspectiva e escolha **Administrator**.
+2. Vá em **Operators → OperatorHub**.
+3. No campo de busca, digite **Guacamole**.
+4. Selecione **Guacamole Operator** → **Install**.
+5. Na tela de instalação:
+   - **Update channel:** `alpha` (ou o channel publicado no seu catálogo)
+   - **Installation mode:** **All namespaces on the cluster** (recomendado — o operator observa CRs em qualquer project)
+   - **Installed Namespace:** escolha ou crie `guacamole-operator` (ou o namespace do seu OperatorGroup)
+   - **Update approval:** Automatic (ou Manual, conforme a política do cluster)
+6. Clique em **Install** e aguarde o status **Succeeded** em **Operators → Installed Operators**.
+7. Confirme a coluna **Status** = **Succeeded** para o CSV (ex.: `guacamole-operator.v0.0.16`).
+
+Após instalado, os CRDs `Guacamole`, `GuacamoleConnection`, `DesktopPool`, `DesktopSession` e `DesktopPortal` aparecem em **Installed Operators → Guacamole Operator → Details / All instances**, e também em **Home → Search** (buscar pelo kind).
+
+---
+
+## Configurar o CRD Guacamole pelo Web Console
+
+O CR `Guacamole` sobe MySQL, guacd, a aplicação web e a Route.
+
+### 1. Criar o Project
+
+1. **Home → Projects → Create Project**
+2. Nome sugerido: `guacamole`
+3. **Create**
+
+### 2. Criar a instância Guacamole
+
+1. **Operators → Installed Operators → Guacamole Operator**
+2. Selecione o Project `guacamole` (dropdown no topo)
+3. Aba **Guacamole** → **Create Guacamole**
+4. Prefira a view **YAML** (mais completa que o form) e use um manifesto equivalente ao sample:
+
+```yaml
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: Guacamole
+metadata:
+  name: guacamole
+  namespace: guacamole
+spec:
+  guacamoleImage: guacamole/guacamole:1.6.0
+  guacdImage: guacamole/guacd:1.6.0
+  mysqlImage: mysql:8.0
+  replicas: 1
+  guacdReplicas: 1
+  logLevel: info
+  database:
+    user: guacamole_user
+    password: guacamole_pass
+    rootPassword: rootpass123
+    name: guacamole_db
+    storageSize: 5Gi
+  route:
+    enabled: true
+    tlsTermination: edge
+    path: /guacamole
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetMemoryUtilizationPercentage: 80
+  guacdAutoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetMemoryUtilizationPercentage: 80
+  # Opcional — SSO Keycloak na UI do Guacamole
+  # openID:
+  #   enabled: true
+  #   issuer: https://keycloak.apps.example.com/realms/guacamole
+  #   clientID: guacamole
+  #   redirectURI: https://guacamole-<ns>.apps.example.com/guacamole
+  #   usernameClaimType: preferred_username
+```
+
+5. **Create**
+6. Na lista, acompanhe a coluna **Phase** até **Running** (ou `Ready`, conforme a versão do CRD).
+7. Abra o recurso → aba **YAML** / **Details** e copie `status.routeURL`.
+8. No browser, acesse a Route. Login inicial do Guacamole: `guacadmin` / `guacadmin` (altere imediatamente).
+
+### Campos principais
+
+| Campo | Função |
+|---|---|
+| `spec.database.*` | Credenciais e tamanho do PVC MySQL |
+| `spec.route` | Expõe a UI (`path` padrão `/guacamole`, TLS edge) |
+| `spec.replicas` / `guacdReplicas` | Réplicas fixas quando HPA está desligado |
+| `spec.autoscaling` / `guacdAutoscaling` | HPA por uso de memória |
+| `spec.openID` | SSO OIDC (Keycloak) na UI do Guacamole |
+| `spec.metricsExporter` | Exporter Prometheus (ativado quando alguma Connection tem `exposeMetrics`) |
+
+Sample completo: [`config/samples/guacamole_v1alpha1_guacamole.yaml`](config/samples/guacamole_v1alpha1_guacamole.yaml).
+
+### (Opcional) GuacamoleConnection pelo Console
+
+1. No mesmo Operator, aba **GuacamoleConnection** → **Create GuacamoleConnection**
+2. Crie antes um Secret com a senha do host RDP (**Workloads → Secrets**).
+3. No YAML, referencie `spec.guacamoleRef.name: guacamole` e `spec.rdp.passwordSecretRef`.
+4. Com `exposeMetrics: true`, o Pod de métricas da instância Guacamole passa a publicar sessões ativas dessa conexão.
+
+---
+
+## Configurar o CRD DesktopPool pelo Web Console
+
+O `DesktopPool` clona VMs Windows a partir de um **DataSource** golden (CDI) e as expõe via Service RDP para o Guacamole.
+
+### Pré-requisitos no cluster
+
+- OpenShift Virtualization (KubeVirt) e CDI instalados
+- Um `DataSource` golden acessível (ex.: `win2k19-guacamole-desktop` no Project `win2k19-golden`)
+- Uma instância `Guacamole` já **Running** (namespace pode ser outro, ex.: `guacamole`)
+- StorageClass adequada para disco das VMs
+
+### 1. Criar o Project do pool
+
+1. **Home → Projects → Create Project**
+2. Nome sugerido: `guacamole-desktops`
+
+### 2. Criar o DesktopPool
+
+1. **Operators → Installed Operators → Guacamole Operator**
+2. Project: `guacamole-desktops`
+3. Aba **DesktopPool** → **Create DesktopPool**
+4. Use a view **YAML**:
+
+```yaml
+apiVersion: guacamole.guacamole.io/v1alpha1
+kind: DesktopPool
+metadata:
+  name: windows-desktop
+  namespace: guacamole-desktops
+spec:
+  replicas: 2
+  source:
+    dataSource:
+      name: win2k19-guacamole-desktop
+      namespace: win2k19-golden
+  virtualMachine:
+    storageClassName: ocs-external-storagecluster-ceph-rbd-immediate   # ajuste ao cluster
+    diskSize: 60Gi
+    cpu: 2
+    memory: 4Gi
+  network:
+    rdpPort: 3389
+  guacamole:
+    instanceRef:
+      name: guacamole
+      namespace: guacamole
+    username: Administrator
+    password: "ChangeMe!"          # ou passwordSecretRef para Secret existente
+    security: any
+    ignoreCert: true
+  recyclePolicy: Delete
+  createConnections: false         # Connection só quando houver DesktopSession
+  powerManagement:
+    enabled: true
+    idleSeconds: 900               # para Available ociosos após 15 min
+  sessionLifecycle:
+    idleSecondsAfterDisconnect: 900
+    maxSecondsAfterReady: 0        # 0 = sem TTL máximo
+```
+
+5. **Create**
+6. Acompanhe **Phase = Ready** e os contadores Desired / Available / Allocated / Stopped.
+7. Se o DataSource estiver em outro namespace, o operator cria RBAC de clone automaticamente (condition `CloneAuthorized`).
+
+### Campos principais
+
+| Campo | Função |
+|---|---|
+| `spec.replicas` | Quantidade desejada de VMs no pool |
+| `spec.source.dataSource` | Golden image (nome + namespace do DataSource) |
+| `spec.virtualMachine` | CPU, memória, disco, StorageClass |
+| `spec.guacamole.instanceRef` | Instância Guacamole que receberá as conexões |
+| `spec.guacamole.password` / `passwordSecretRef` | Credenciais RDP do guest |
+| `spec.recyclePolicy` | `Delete` (novo clone) ou `Retain` ao liberar session |
+| `spec.createConnections` | `true` = Connection provisória por VM; `false` = só com Session |
+| `spec.powerManagement` | Idle stop + wake sob demanda |
+| `spec.sessionLifecycle` | Logoff após disconnect idle / TTL da session |
+| `spec.minReady` | Quantos desktops Available manter aquecidos |
+
+Documentação detalhada: [`docs/DESKTOP_POOL.md`](docs/DESKTOP_POOL.md).  
+Sample: [`config/samples/guacamole_v1alpha1_desktoppool.yaml`](config/samples/guacamole_v1alpha1_desktoppool.yaml).
+
+### Próximos passos (sessions e portal)
+
+- **DesktopSession**: reserva um desktop do pool para um `requester.subject` (usuário Keycloak).
+- **DesktopPortal**: plugin no Console + User Portal; permite escolher o Desktop Pool e alocar sessions. Ver [`docs/DESKTOP_PORTAL.md`](docs/DESKTOP_PORTAL.md).
+
+No Console, após criar o Portal: **Home → Desktop Sessions** (path padrão `/guacamole-desktops` se pinado, ou o path em `status.consolePath`).
 
 ---
 
 ## Tutorial completo — do zero ao Operator Hub
 
-Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e OpenShift 4.x.
+Este tutorial é o fluxo de **build e publicação** (CLI), testado em Mac Apple Silicon com Podman e OpenShift 4.x. Para só **usar** o operator já publicado, prefira as seções de [Web Console](#instalar-o-guacamole-operator-pelo-web-console) acima.
 
 ### Visão geral das fases
 
@@ -181,8 +436,8 @@ Este tutorial reflete o fluxo **testado e validado** em um Mac M1 com Podman e O
 Defina uma vez e reutilize em todos os passos:
 
 ```bash
-export VERSION=0.0.6
-export NAMESPACE=guacamole-operator-system
+export VERSION=0.0.16
+export NAMESPACE=guacamole-operator
 ```
 
 Faça login no cluster:
@@ -333,7 +588,7 @@ oc apply -f config/olm/catalogsource.yaml
 O arquivo usa a URL **interna** do registry (funciona em qualquer OpenShift):
 
 ```yaml
-image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-operator-catalog:0.0.6
+image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator-catalog:0.0.16
 ```
 
 Aguarde o pod do catálogo ficar `Running`:
@@ -381,62 +636,38 @@ A partir da versão **0.0.3+**, o CSV já embute as imagens corretas:
 
 ---
 
-### Fase 4 — Verificar no Web Console
+### Fase 4 — Verificar / instalar no Web Console
 
-1. Acesse **Operators → Operator Hub**
-2. Busque **"Guacamole Operator"**
-3. Deve aparecer com badge **Installed** (já instalado via Subscription)
+Com o CatalogSource saudável, siga [Instalar o Guacamole Operator pelo Web Console](#instalar-o-guacamole-operator-pelo-web-console).  
+Alternativa CLI: `oc apply -f config/olm/operatorgroup.yaml` e `oc apply -f config/olm/subscription.yaml`.
 
----
+### Fase 5 — Criar Guacamole e DesktopPool
 
-### Fase 5 — Criar uma instância Guacamole
+Pelo Console: [Configurar Guacamole](#configurar-o-crd-guacamole-pelo-web-console) e [Configurar DesktopPool](#configurar-o-crd-desktoppool-pelo-web-console).
 
-O operator pode criar instâncias em **qualquer namespace** (OperatorGroup global):
+Pela CLI (samples):
 
 ```bash
 oc new-project guacamole
 oc apply -f config/samples/guacamole_v1alpha1_guacamole.yaml
+
+oc new-project guacamole-desktops
+oc apply -f config/samples/guacamole_v1alpha1_desktoppool.yaml
 ```
 
-Acompanhar:
-
-```bash
-oc get guacamole -n guacamole
-oc get pods -n guacamole
-oc get route -n guacamole
-```
-
-Obter a URL externa:
-
-```bash
-oc get guacamole guacamole -n guacamole \
-  -o jsonpath='{.status.routeURL}{"\n"}'
-```
-
-Credenciais padrão do Guacamole após primeiro acesso: `guacadmin` / `guacadmin` (altere imediatamente).
-
----
-
-### Fase 6 — Criar uma conexão RDP
-
-Com a instância `Guacamole` em fase `Running`, crie um Secret com a senha e aplique o `GuacamoleConnection`:
+### Fase 6 — Criar uma conexão RDP (opcional / jumphost)
 
 ```bash
 oc create secret generic windows-jumphost-credentials \
   -n guacamole --from-literal=password='SuaSenha'
 
 oc apply -f config/samples/guacamole_v1alpha1_guacamoleconnection.yaml
-```
 
-Acompanhar:
-
-```bash
-oc get guacamoleconnection -n guacamole
 oc get guacamoleconnection windows-jumphost -n guacamole \
   -o jsonpath='phase={.status.phase} connectionID={.status.connectionID}{"\n"}'
 ```
 
-Esperado: `phase=Ready` e `connectionID` preenchido. A conexão aparece em **Settings → Connections** na UI do Guacamole.
+Esperado: `phase=Ready` e `connectionID` preenchido.
 
 ---
 
@@ -533,11 +764,11 @@ O `status.connectionID` guarda o ID no MySQL para updates idempotentes. Senhas d
 
 ## Publicar uma nova versão
 
-Para publicar uma correção (ex.: `0.0.7`), partindo da versão anterior no catálogo:
+Para publicar uma correção (ex.: `0.0.17`), partindo da versão anterior no catálogo:
 
 ```bash
-export VERSION=0.0.7
-export PREVIOUS_VERSION=0.0.6
+export VERSION=0.0.17
+export PREVIOUS_VERSION=0.0.16
 
 # 1. Rebuild e push (mesmo fluxo da Fase 1 + 2)
 podman build --platform linux/amd64 -t guacamole.io/guacamole-operator:${VERSION} .
@@ -771,7 +1002,7 @@ O thumbnail do Operator Hub vem do campo `spec.icon` no CSV. O ícone fonte fica
 Após alterar o ícone, regenere o bundle e a catalog image, faça push e reinicie o pod do catálogo:
 
 ```bash
-export PREVIOUS_VERSION=0.0.6   # versão anterior no catálogo
+export PREVIOUS_VERSION=0.0.16   # versão anterior no catálogo
 
 make bundle VERSION=${VERSION} DEFAULT_CHANNEL=alpha IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator:${VERSION}
 make bundle-build BUNDLE_IMG=${REGISTRY}/${NAMESPACE}/guacamole-operator-bundle:${VERSION} CONTAINER_TOOL=podman
