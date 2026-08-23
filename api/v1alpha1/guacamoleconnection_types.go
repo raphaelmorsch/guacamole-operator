@@ -21,9 +21,9 @@ import (
 )
 
 // GuacamoleConnectionSpec defines a Guacamole connection stored in the instance database.
-// +kubebuilder:validation:XValidation:rule="self.protocol != 'rdp' || has(self.rdp) && self.rdp.hostname != ”",message="spec.rdp.hostname is required when protocol is rdp"
-// +kubebuilder:validation:XValidation:rule="self.protocol != 'vnc' || has(self.vnc) && self.vnc.hostname != ”",message="spec.vnc.hostname is required when protocol is vnc"
-// +kubebuilder:validation:XValidation:rule="self.protocol != 'ssh' || has(self.ssh) && self.ssh.hostname != ”",message="spec.ssh.hostname is required when protocol is ssh"
+// +kubebuilder:validation:XValidation:rule="self.protocol != 'rdp' || has(self.rdp) && self.rdp.hostname != ''",message="spec.rdp.hostname is required when protocol is rdp"
+// +kubebuilder:validation:XValidation:rule="self.protocol != 'vnc' || has(self.vnc) && self.vnc.hostname != ''",message="spec.vnc.hostname is required when protocol is vnc"
+// +kubebuilder:validation:XValidation:rule="self.protocol != 'ssh' || has(self.ssh) && self.ssh.hostname != ''",message="spec.ssh.hostname is required when protocol is ssh"
 // +kubebuilder:validation:XValidation:rule="!(self.protocol in ['telnet','kubernetes']) || size(self.additionalParameters) > 0",message="spec.additionalParameters is required when protocol is telnet or kubernetes"
 type GuacamoleConnectionSpec struct {
 	// GuacamoleRef links this connection to a Guacamole stack instance.

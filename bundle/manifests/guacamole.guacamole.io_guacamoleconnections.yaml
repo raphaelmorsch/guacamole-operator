@@ -480,13 +480,13 @@ spec:
             x-kubernetes-validations:
             - message: spec.rdp.hostname is required when protocol is rdp
               rule: self.protocol != 'rdp' || has(self.rdp) && self.rdp.hostname !=
-                ”
+                ''
             - message: spec.vnc.hostname is required when protocol is vnc
               rule: self.protocol != 'vnc' || has(self.vnc) && self.vnc.hostname !=
-                ”
+                ''
             - message: spec.ssh.hostname is required when protocol is ssh
               rule: self.protocol != 'ssh' || has(self.ssh) && self.ssh.hostname !=
-                ”
+                ''
             - message: spec.additionalParameters is required when protocol is telnet
                 or kubernetes
               rule: '!(self.protocol in [''telnet'',''kubernetes'']) || size(self.additionalParameters)

@@ -5,7 +5,7 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
+  image: quay.io/ramoreir/guacamole-operator-catalog:0.0.17
   displayName: Guacamole Operator Catalog
   publisher: Raphael Morsch
   updateStrategy:
