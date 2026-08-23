@@ -4,7 +4,9 @@ Operator Kubernetes/OpenShift para implantar **Apache Guacamole** de forma decla
 
 **Versão OLM (CSV) atual:** `0.0.16`
 
-> Guia rápido pelo **OpenShift Web Console:** [Instalar o Operator](#instalar-o-guacamole-operator-pelo-web-console) · [Configurar Guacamole](#configurar-o-crd-guacamole-pelo-web-console) · [Configurar DesktopPool](#configurar-o-crd-desktoppool-pelo-web-console) · [Release Notes](#release-notes)
+**Imagens publicadas (Quay.io):** [`quay.io/ramoreir/guacamole-operator`](https://quay.io/ramoreir/guacamole-operator) · [`guacamole-operator-catalog`](https://quay.io/ramoreir/guacamole-operator-catalog) · [`guacamole-operator-bundle`](https://quay.io/ramoreir/guacamole-operator-bundle)
+
+> Guia rápido pelo **OpenShift Web Console:** [Instalar via Quay](#instalar-via-quayio) · [Instalar o Operator](#instalar-o-guacamole-operator-pelo-web-console) · [Configurar Guacamole](#configurar-o-crd-guacamole-pelo-web-console) · [Configurar DesktopPool](#configurar-o-crd-desktoppool-pelo-web-console) · [Release Notes](#release-notes)
 
 ## Custom Resources
 
@@ -202,7 +204,7 @@ spec:
 |---|---|
 | OpenShift 4.x | OLM já incluso |
 | Permissão | `cluster-admin` (ou equivalente) para instalar Operators |
-| CatalogSource | Catálogo do Guacamole Operator publicado no cluster (ver [publicação](#tutorial-completo--do-zero-ao-operator-hub)) |
+| CatalogSource | Catálogo no cluster — [via Quay.io](#instalar-via-quayio) (recomendado) ou [build local](#tutorial-completo--do-zero-ao-operator-hub) |
 | OpenShift Virtualization + CDI | Necessários para **DesktopPool** (clone de VMs) |
 | DataSource golden | Imagem Windows pronta (ex.: `win2k19-guacamole-desktop`) |
 
@@ -218,9 +220,70 @@ spec:
 
 ---
 
+## Instalar via Quay.io
+
+As imagens OLM do Guacamole Operator estão publicadas em **quay.io/ramoreir**:
+
+| Imagem | Uso |
+|---|---|
+| `quay.io/ramoreir/guacamole-operator-catalog:0.0.16` | CatalogSource (Operator Hub) |
+| `quay.io/ramoreir/guacamole-operator-bundle:0.0.16` | Bundle OLM (referenciado pelo catálogo) |
+| `quay.io/ramoreir/guacamole-operator:0.0.16` | Deployment do controller |
+
+### CLI (recomendado)
+
+```bash
+oc login <API_URL> -u <USER> -p <PASSWORD>
+
+# 1. Registrar o catálogo no Operator Hub
+oc apply -f config/olm/catalogsource.yaml
+
+# 2. Aguardar o pod do catálogo
+oc get pods -n openshift-marketplace | grep guacamole
+# Esperado: guacamole-operator-catalog-*   1/1   Running
+
+# 3. Instalar o operator (AllNamespaces)
+oc new-project guacamole-operator --dry-run=client -o yaml | oc apply -f -
+oc apply -f config/olm/operatorgroup.yaml
+oc apply -f config/olm/subscription.yaml
+
+# 4. Confirmar instalação
+oc get csv -n guacamole-operator
+oc get pods -n guacamole-operator
+```
+
+O `config/olm/catalogsource.yaml` aponta para:
+
+```yaml
+image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
+```
+
+> **Repositório privado no Quay:** crie um `imagePullSecret` no namespace `openshift-marketplace` e associe-o ao `ServiceAccount` `default` (ou ao SA usado pelo catalog operator). Repositórios públicos não exigem esse passo.
+
+### Web Console
+
+1. Aplique o CatalogSource pela CLI (passo acima) ou em **Administrator → CustomResourceDefinitions → CatalogSource → Create** com o YAML de `config/olm/catalogsource.yaml`.
+2. Aguarde o catálogo ficar saudável em **Administrator → Administration → Cluster Settings → OperatorHub** (ou verifique o pod em `openshift-marketplace`).
+3. Siga [Instalar o Guacamole Operator pelo Web Console](#instalar-o-guacamole-operator-pelo-web-console).
+
+### Imagens auxiliares (DesktopPortal / métricas)
+
+O CSV referencia também imagens no mesmo registry Quay (tag `0.0.16`):
+
+- `quay.io/ramoreir/guacamole-metrics-exporter`
+- `quay.io/ramoreir/guacamole-desktop-portal-plugin`
+- `quay.io/ramoreir/guacamole-desktop-portal-api`
+- `quay.io/ramoreir/guacamole-desktop-user-portal`
+
+Publique-as com `make docker-buildx` / `make desktop-portal-images` (ver Makefile) e `podman push` para o Quay antes de usar **DesktopPortal** ou `exposeMetrics` sem `spec.metricsExporter.image` explícito.
+
+Para instalação com registry **interno do OpenShift** (build local), use `config/olm/catalogsource-openshift.yaml` e o [tutorial CLI](#tutorial-completo--do-zero-ao-operator-hub).
+
+---
+
 ## Instalar o Guacamole Operator pelo Web Console
 
-Pré-condição: o **CatalogSource** do operator já está disponível no cluster (namespace `openshift-marketplace` ou equivalente). Se ainda não publicou o catálogo, siga a [publicação via CLI](#tutorial-completo--do-zero-ao-operator-hub) e depois volte aqui.
+Pré-condição: o **CatalogSource** do operator já está disponível no cluster (`openshift-marketplace`). A forma mais simples é [Instalar via Quay.io](#instalar-via-quayio). Para build local no registry do cluster, siga o [tutorial CLI](#tutorial-completo--do-zero-ao-operator-hub).
 
 1. No OpenShift Web Console, abra o seletor de perspectiva e escolha **Administrator**.
 2. Vá em **Operators → OperatorHub**.
@@ -567,9 +630,11 @@ oc get imagestream -n ${NAMESPACE}
 
 ### Fase 3 — Publicar no Operator Hub
 
-#### 3a. Permitir pull do catálogo
+> **Alternativa:** se as imagens já estão no Quay.io, pule as fases 1–2 e use [Instalar via Quay.io](#instalar-via-quayio).
 
-O namespace `openshift-marketplace` precisa puxar imagens do seu namespace:
+#### 3a. Permitir pull do catálogo (somente registry interno)
+
+Necessário apenas quando o catálogo está no **registry interno** do OpenShift. Com **Quay.io** público, pule este passo.
 
 ```bash
 oc adm policy add-role-to-group system:image-puller \
@@ -579,13 +644,21 @@ oc adm policy add-role-to-group system:image-puller \
 
 #### 3b. Aplicar CatalogSource
 
-Atualize a tag da imagem em `config/olm/catalogsource.yaml` para a versão desejada, depois aplique:
+**Quay.io (recomendado):**
 
 ```bash
 oc apply -f config/olm/catalogsource.yaml
 ```
 
-O arquivo usa a URL **interna** do registry (funciona em qualquer OpenShift):
+```yaml
+image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
+```
+
+**Registry interno do OpenShift** (após build local):
+
+```bash
+oc apply -f config/olm/catalogsource-openshift.yaml
+```
 
 ```yaml
 image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator-catalog:0.0.16
@@ -632,7 +705,7 @@ Esperado: `PHASE: Succeeded`.
 A partir da versão **0.0.3+**, o CSV já embute as imagens corretas:
 
 - `quay.io/brancz/kube-rbac-proxy:v0.18.2`
-- Imagem do operator no registry do OpenShift
+- `quay.io/ramoreir/guacamole-operator:0.0.16` (e imagens auxiliares no mesmo registry)
 
 ---
 

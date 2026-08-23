@@ -1,3 +1,5 @@
+# CatalogSource usando o registry interno do OpenShift (build/push local no cluster).
+# Para instalação via Quay.io, use config/olm/catalogsource.yaml.
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -5,7 +7,7 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
+  image: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator-catalog:0.0.16
   displayName: Guacamole Operator Catalog
   publisher: Raphael Morsch
   updateStrategy:

@@ -1,3 +1,4 @@
+# Alias de config/olm/catalogsource.yaml (Quay.io). Prefira aplicar catalogsource.yaml.
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:

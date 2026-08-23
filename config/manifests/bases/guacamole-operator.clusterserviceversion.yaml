@@ -43,7 +43,7 @@ metadata:
               "targetMemoryUtilizationPercentage": 80
             },
             "metricsExporter": {
-              "image": "image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-metrics-exporter:0.0.12",
+              "image": "quay.io/ramoreir/guacamole-metrics-exporter:0.0.16",
               "port": 9110,
               "scrapeIntervalSeconds": 15
             }
@@ -85,7 +85,7 @@ metadata:
       ]
     capabilities: Full Lifecycle
     categories: Networking
-    containerImage: image-registry.openshift-image-registry.svc:5000/guacamole-operator/guacamole-operator:0.0.16
+    containerImage: quay.io/ramoreir/guacamole-operator:0.0.16
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"
@@ -186,6 +186,6 @@ spec:
     name: Raphael Morsch
     url: https://github.com/raphaelmorsch
   relatedImages:
-  - image: image-registry.openshift-image-registry.svc:5000/guacamole-operator-system/guacamole-metrics-exporter:0.0.12
+  - image: quay.io/ramoreir/guacamole-metrics-exporter:0.0.16
     name: guacamole-metrics-exporter
   version: 0.0.12
