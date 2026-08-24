@@ -33,11 +33,19 @@ spec:
   metricsExporter:
     port: 9110
     scrapeIntervalSeconds: 15
-  # Optional: Keycloak / OIDC SSO for the Guacamole web UI
+  # Optional: Keycloak / OIDC SSO for the Guacamole web UI (omit openID for MySQL users)
   # openID:
   #   enabled: true
   #   issuer: https://keycloak.apps.example.com/realms/guacamole
   #   clientID: guacamole
   #   redirectURI: https://guacamole.apps.example.com/guacamole
   #   usernameClaimType: preferred_username
+  # Optional — customize login page title and logo (PNG recommended)
+  # loginBranding:
+  #   enabled: true
+  #   title: "Corp Desktop Portal"
+  #   logoSource: secret
+  #   logoSecretRef:
+  #     name: guacamole-login-logo
+  #     key: logo
   #   extensionPriority: "*,openid"

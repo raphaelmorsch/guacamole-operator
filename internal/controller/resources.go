@@ -560,12 +560,20 @@ fi
 			},
 		},
 	}
+	applyLoginBranding(g, deploy)
 	return deploy
+}
+
+func openIDEnabled(oidc *guacamolev1alpha1.OpenIDSpec) bool {
+	if oidc == nil || oidc.Enabled == nil {
+		return false
+	}
+	return *oidc.Enabled
 }
 
 func openIDEnv(g *guacamolev1alpha1.Guacamole) []corev1.EnvVar {
 	oidc := g.Spec.OpenID
-	if oidc == nil || (oidc.Enabled != nil && !*oidc.Enabled) {
+	if !openIDEnabled(oidc) {
 		return nil
 	}
 	if strings.TrimSpace(oidc.Issuer) == "" || strings.TrimSpace(oidc.ClientID) == "" {

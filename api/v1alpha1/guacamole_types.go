@@ -75,56 +75,115 @@ type GuacamoleSpec struct {
 	// +optional
 	MetricsExporter MetricsExporterSpec `json:"metricsExporter,omitempty"`
 
-	// OpenID configures OpenID Connect SSO (e.g. Keycloak) for the Guacamole web UI.
-	// When set, the guacamole/guacamole container loads guacamole-auth-sso-openid
-	// alongside the MySQL JDBC extension.
+	// OpenID configures optional OpenID Connect SSO (e.g. Keycloak) for the Guacamole web UI.
+	// Omit this block entirely to use native MySQL users. When present, set enabled=true to activate SSO.
 	// +optional
 	OpenID *OpenIDSpec `json:"openID,omitempty"`
+
+	// LoginBranding customizes the Guacamole login page title and logo.
+	// Omit this block entirely for the default login screen, or set enabled=true to activate.
+	// +optional
+	LoginBranding *LoginBrandingSpec `json:"loginBranding,omitempty"`
+}
+
+// LoginBrandingSpec customizes the Guacamole web login screen via a branding extension.
+// Leave spec.loginBranding unset, or set enabled=false, to keep the default Apache Guacamole login page.
+// CEL rules treat empty object refs ({}) from the Console form as unset (only .name is checked).
+// +kubebuilder:validation:XValidation:rule="!self.enabled || self.title != '' || self.logoSource in ['secret','configMap']",message="title and/or a logo source is required when login branding is enabled"
+// +kubebuilder:validation:XValidation:rule="!self.enabled || self.logoSource != 'secret' || (has(self.logoSecretRef.name) && self.logoSecretRef.name != '')",message="logoSecretRef.name is required when logo source is Secret"
+// +kubebuilder:validation:XValidation:rule="!self.enabled || self.logoSource != 'configMap' || (has(self.logoConfigMapRef.name) && self.logoConfigMapRef.name != '')",message="logoConfigMapRef.name is required when logo source is ConfigMap"
+type LoginBrandingSpec struct {
+	// Enabled activates custom login page branding (title and/or logo).
+	// Defaults to false. When false, the default Apache Guacamole login page is used.
+	// +kubebuilder:default=false
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable custom login branding",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Title replaces the default "Apache Guacamole" heading on the login page.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Login page title",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true","urn:alm:descriptor:com.tectonic.ui:text"}
+	// +optional
+	Title string `json:"title,omitempty"`
+
+	// LogoSource selects where the login logo image is stored.
+	// Use "none" for title-only branding without a custom logo.
+	// +kubebuilder:default=none
+	// +kubebuilder:validation:Enum=none;secret;configMap
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Logo source",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true","urn:alm:descriptor:com.tectonic.ui:select:none","urn:alm:descriptor:com.tectonic.ui:select:secret","urn:alm:descriptor:com.tectonic.ui:select:configMap"}
+	// +optional
+	LogoSource string `json:"logoSource,omitempty"`
+
+	// LogoSecretRef provides a PNG logo from a Secret in the same namespace.
+	// Required when logoSource is "secret".
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Logo (Secret)",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true","urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.logoSource:secret","urn:alm:descriptor:io.kubernetes:Secret"}
+	// +optional
+	LogoSecretRef *SecretKeyRef `json:"logoSecretRef,omitempty"`
+
+	// LogoConfigMapRef provides a PNG logo from a ConfigMap in the same namespace.
+	// Required when logoSource is "configMap".
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Logo (ConfigMap)",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true","urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.logoSource:configMap","urn:alm:descriptor:io.kubernetes:ConfigMap"}
+	// +optional
+	LogoConfigMapRef *SecretKeyRef `json:"logoConfigMapRef,omitempty"`
 }
 
 // OpenIDSpec configures Guacamole's OpenID Connect authentication extension.
+// Leave spec.openID unset, or set enabled=false, to use native MySQL (JDBC) users.
 // See https://guacamole.apache.org/doc/gug/openid-auth.html
+// +kubebuilder:validation:XValidation:rule="!self.enabled || (self.issuer != '' && self.clientID != '')",message="issuer and clientID are required when OpenID is enabled"
 type OpenIDSpec struct {
-	// Enabled activates the OpenID extension.
-	// Defaults to true when this object is present.
-	// +kubebuilder:default=true
+	// Enabled activates the OpenID extension for the Guacamole web UI.
+	// Defaults to false. When false, users authenticate with MySQL accounts (e.g. guacadmin).
+	// +kubebuilder:default=false
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable OpenID Connect (SSO)",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 
 	// Issuer is the expected token issuer (Keycloak: https://.../realms/<realm>).
-	Issuer string `json:"issuer"`
+	// Required when enabled is true.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Issuer",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:text"}
+	// +optional
+	Issuer string `json:"issuer,omitempty"`
 
 	// AuthorizationEndpoint is the OIDC authorization endpoint.
 	// Defaults to <issuer>/protocol/openid-connect/auth when unset.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Authorization endpoint",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:advanced","urn:alm:descriptor:com.tectonic.ui:text"}
 	// +optional
 	AuthorizationEndpoint string `json:"authorizationEndpoint,omitempty"`
 
 	// JWKSEndpoint is the JWKS URI used to validate ID tokens.
 	// Defaults to <issuer>/protocol/openid-connect/certs when unset.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="JWKS endpoint",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:advanced","urn:alm:descriptor:com.tectonic.ui:text"}
 	// +optional
 	JWKSEndpoint string `json:"jwksEndpoint,omitempty"`
 
 	// ClientID is the OIDC client id registered in the identity provider.
-	ClientID string `json:"clientID"`
+	// Required when enabled is true.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client ID",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:text"}
+	// +optional
+	ClientID string `json:"clientID,omitempty"`
 
 	// ClientSecretRef optionally provides a confidential client secret.
 	// Not required for Guacamole's default OpenID implicit flow.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client secret",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:advanced"}
 	// +optional
 	ClientSecretRef *SecretKeyRef `json:"clientSecretRef,omitempty"`
 
 	// RedirectURI is the full Guacamole URL returned to after IdP login.
 	// Defaults to status.routeURL when unset.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Redirect URI",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:text"}
 	// +optional
 	RedirectURI string `json:"redirectURI,omitempty"`
 
 	// UsernameClaimType is the JWT claim used as the Guacamole username.
 	// Use preferred_username when integrating with Keycloak users that match DesktopSession subjects.
 	// +kubebuilder:default="preferred_username"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Username claim",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:advanced","urn:alm:descriptor:com.tectonic.ui:text"}
 	// +optional
 	UsernameClaimType string `json:"usernameClaimType,omitempty"`
 
 	// Scope is the space-separated OpenID scope list.
 	// +kubebuilder:default="openid email profile"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Scope",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:advanced","urn:alm:descriptor:com.tectonic.ui:text"}
 	// +optional
 	Scope string `json:"scope,omitempty"`
 
@@ -132,6 +191,7 @@ type OpenIDSpec struct {
 	// "*,openid" keeps the Guacamole login form and adds an SSO option.
 	// "openid" redirects unauthenticated users straight to the IdP.
 	// +kubebuilder:default="*,openid"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Extension priority",xDescriptors={"urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true","urn:alm:descriptor:com.tectonic.ui:advanced","urn:alm:descriptor:com.tectonic.ui:text"}
 	// +optional
 	ExtensionPriority string `json:"extensionPriority,omitempty"`
 }

@@ -124,6 +124,132 @@ spec:
       displayName: Guacamole
       kind: Guacamole
       name: guacamoles.guacamole.guacamole.io
+      specDescriptors:
+      - description: |-
+          Enabled activates custom login page branding (title and/or logo).
+          Defaults to false. When false, the default Apache Guacamole login page is used.
+        displayName: Enable custom login branding
+        path: loginBranding.enabled
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+      - description: |-
+          LogoConfigMapRef provides a PNG logo from a ConfigMap in the same namespace.
+          Required when logoSource is "configMap".
+        displayName: Logo (ConfigMap)
+        path: loginBranding.logoConfigMapRef
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.logoSource:configMap
+        - urn:alm:descriptor:io.kubernetes:ConfigMap
+      - description: |-
+          LogoSecretRef provides a PNG logo from a Secret in the same namespace.
+          Required when logoSource is "secret".
+        displayName: Logo (Secret)
+        path: loginBranding.logoSecretRef
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.logoSource:secret
+        - urn:alm:descriptor:io.kubernetes:Secret
+      - description: |-
+          LogoSource selects where the login logo image is stored.
+          Use "none" for title-only branding without a custom logo.
+        displayName: Logo source
+        path: loginBranding.logoSource
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:select:none
+        - urn:alm:descriptor:com.tectonic.ui:select:secret
+        - urn:alm:descriptor:com.tectonic.ui:select:configMap
+      - description: Title replaces the default "Apache Guacamole" heading on the
+          login page.
+        displayName: Login page title
+        path: loginBranding.title
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:loginBranding.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          AuthorizationEndpoint is the OIDC authorization endpoint.
+          Defaults to <issuer>/protocol/openid-connect/auth when unset.
+        displayName: Authorization endpoint
+        path: openID.authorizationEndpoint
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          ClientID is the OIDC client id registered in the identity provider.
+          Required when enabled is true.
+        displayName: Client ID
+        path: openID.clientID
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          ClientSecretRef optionally provides a confidential client secret.
+          Not required for Guacamole's default OpenID implicit flow.
+        displayName: Client secret
+        path: openID.clientSecretRef
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+      - description: |-
+          Enabled activates the OpenID extension for the Guacamole web UI.
+          Defaults to false. When false, users authenticate with MySQL accounts (e.g. guacadmin).
+        displayName: Enable OpenID Connect (SSO)
+        path: openID.enabled
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+      - description: |-
+          ExtensionPriority controls login UX.
+          "*,openid" keeps the Guacamole login form and adds an SSO option.
+          "openid" redirects unauthenticated users straight to the IdP.
+        displayName: Extension priority
+        path: openID.extensionPriority
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          Issuer is the expected token issuer (Keycloak: https://.../realms/<realm>).
+          Required when enabled is true.
+        displayName: Issuer
+        path: openID.issuer
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          JWKSEndpoint is the JWKS URI used to validate ID tokens.
+          Defaults to <issuer>/protocol/openid-connect/certs when unset.
+        displayName: JWKS endpoint
+        path: openID.jwksEndpoint
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          RedirectURI is the full Guacamole URL returned to after IdP login.
+          Defaults to status.routeURL when unset.
+        displayName: Redirect URI
+        path: openID.redirectURI
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: Scope is the space-separated OpenID scope list.
+        displayName: Scope
+        path: openID.scope
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+        - urn:alm:descriptor:com.tectonic.ui:text
+      - description: |-
+          UsernameClaimType is the JWT claim used as the Guacamole username.
+          Use preferred_username when integrating with Keycloak users that match DesktopSession subjects.
+        displayName: Username claim
+        path: openID.usernameClaimType
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:fieldDependency:openID.enabled:true
+        - urn:alm:descriptor:com.tectonic.ui:advanced
+        - urn:alm:descriptor:com.tectonic.ui:text
       version: v1alpha1
   description: |
     ## Guacamole Operator for OpenShift

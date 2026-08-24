@@ -50,7 +50,7 @@ type GuacamoleReconciler struct {
 // +kubebuilder:rbac:groups=guacamole.guacamole.io,resources=guacamoles/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services;secrets;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;secrets;configmaps;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GuacamoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -141,6 +141,9 @@ func (r *GuacamoleReconciler) reconcileStack(ctx context.Context, guac *guacamol
 	}
 	if err := r.reconcileGuacdAutoscaling(ctx, guac); err != nil {
 		return fmt.Errorf("reconcile guacd autoscaling: %w", err)
+	}
+	if err := r.reconcileLoginBranding(ctx, guac); err != nil {
+		return fmt.Errorf("reconcile login branding: %w", err)
 	}
 	if err := r.reconcileDeployment(ctx, guac, desiredGuacamoleDeployment(guac)); err != nil {
 		return fmt.Errorf("reconcile guacamole deployment: %w", err)
@@ -423,6 +426,7 @@ func (r *GuacamoleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&guacamolev1alpha1.Guacamole{}).
 		Owns(&corev1.Secret{}).
+		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&corev1.Service{}).
 		Owns(&appsv1.Deployment{}).

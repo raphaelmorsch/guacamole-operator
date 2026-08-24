@@ -183,6 +183,69 @@ spec:
                 - warn
                 - error
                 type: string
+              loginBranding:
+                description: |-
+                  LoginBranding customizes the Guacamole login page title and logo.
+                  Omit this block entirely for the default login screen, or set enabled=true to activate.
+                properties:
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled activates custom login page branding (title and/or logo).
+                      Defaults to false. When false, the default Apache Guacamole login page is used.
+                    type: boolean
+                  logoConfigMapRef:
+                    description: |-
+                      LogoConfigMapRef provides a PNG logo from a ConfigMap in the same namespace.
+                      Required when logoSource is "configMap".
+                    properties:
+                      key:
+                        default: password
+                        description: Key within the secret.
+                        type: string
+                      name:
+                        description: Name of the secret.
+                        type: string
+                    type: object
+                  logoSecretRef:
+                    description: |-
+                      LogoSecretRef provides a PNG logo from a Secret in the same namespace.
+                      Required when logoSource is "secret".
+                    properties:
+                      key:
+                        default: password
+                        description: Key within the secret.
+                        type: string
+                      name:
+                        description: Name of the secret.
+                        type: string
+                    type: object
+                  logoSource:
+                    default: none
+                    description: |-
+                      LogoSource selects where the login logo image is stored.
+                      Use "none" for title-only branding without a custom logo.
+                    enum:
+                    - none
+                    - secret
+                    - configMap
+                    type: string
+                  title:
+                    description: Title replaces the default "Apache Guacamole" heading
+                      on the login page.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: title and/or a logo source is required when login branding
+                    is enabled
+                  rule: '!self.enabled || self.title != '''' || self.logoSource in
+                    [''secret'',''configMap'']'
+                - message: logoSecretRef.name is required when logo source is Secret
+                  rule: '!self.enabled || self.logoSource != ''secret'' || (has(self.logoSecretRef.name)
+                    && self.logoSecretRef.name != '''')'
+                - message: logoConfigMapRef.name is required when logo source is ConfigMap
+                  rule: '!self.enabled || self.logoSource != ''configMap'' || (has(self.logoConfigMapRef.name)
+                    && self.logoConfigMapRef.name != '''')'
               metricsExporter:
                 description: |-
                   MetricsExporter configures the shared Prometheus exporter deployment.
@@ -266,9 +329,8 @@ spec:
                 type: string
               openID:
                 description: |-
-                  OpenID configures OpenID Connect SSO (e.g. Keycloak) for the Guacamole web UI.
-                  When set, the guacamole/guacamole container loads guacamole-auth-sso-openid
-                  alongside the MySQL JDBC extension.
+                  OpenID configures optional OpenID Connect SSO (e.g. Keycloak) for the Guacamole web UI.
+                  Omit this block entirely to use native MySQL users. When present, set enabled=true to activate SSO.
                 properties:
                   authorizationEndpoint:
                     description: |-
@@ -276,8 +338,9 @@ spec:
                       Defaults to <issuer>/protocol/openid-connect/auth when unset.
                     type: string
                   clientID:
-                    description: ClientID is the OIDC client id registered in the
-                      identity provider.
+                    description: |-
+                      ClientID is the OIDC client id registered in the identity provider.
+                      Required when enabled is true.
                     type: string
                   clientSecretRef:
                     description: |-
@@ -293,10 +356,10 @@ spec:
                         type: string
                     type: object
                   enabled:
-                    default: true
+                    default: false
                     description: |-
-                      Enabled activates the OpenID extension.
-                      Defaults to true when this object is present.
+                      Enabled activates the OpenID extension for the Guacamole web UI.
+                      Defaults to false. When false, users authenticate with MySQL accounts (e.g. guacadmin).
                     type: boolean
                   extensionPriority:
                     default: '*,openid'
@@ -306,7 +369,9 @@ spec:
                       "openid" redirects unauthenticated users straight to the IdP.
                     type: string
                   issuer:
-                    description: 'Issuer is the expected token issuer (Keycloak: https://.../realms/<realm>).'
+                    description: |-
+                      Issuer is the expected token issuer (Keycloak: https://.../realms/<realm>).
+                      Required when enabled is true.
                     type: string
                   jwksEndpoint:
                     description: |-
@@ -328,10 +393,11 @@ spec:
                       UsernameClaimType is the JWT claim used as the Guacamole username.
                       Use preferred_username when integrating with Keycloak users that match DesktopSession subjects.
                     type: string
-                required:
-                - clientID
-                - issuer
                 type: object
+                x-kubernetes-validations:
+                - message: issuer and clientID are required when OpenID is enabled
+                  rule: '!self.enabled || (self.issuer != '''' && self.clientID !=
+                    '''')'
               replicas:
                 default: 1
                 description: Replicas is the number of Guacamole web application replicas.

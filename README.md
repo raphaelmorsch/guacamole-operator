@@ -2,7 +2,7 @@
 
 Operator Kubernetes/OpenShift para implantar **Apache Guacamole** de forma declarativa no Red Hat OpenShift. Baseado na implementação de referência [guacamole-rdp](https://github.com/raphaelmorsch/guacamole-rdp).
 
-**Versão OLM (CSV) atual:** `0.0.16`
+**Versão OLM (CSV) atual:** `0.0.21`
 
 **Imagens publicadas (Quay.io):** [`quay.io/ramoreir/guacamole-operator`](https://quay.io/ramoreir/guacamole-operator) · [`guacamole-operator-catalog`](https://quay.io/ramoreir/guacamole-operator-catalog) · [`guacamole-operator-bundle`](https://quay.io/ramoreir/guacamole-operator-bundle)
 
@@ -137,7 +137,28 @@ spec:
 
 ## Release Notes
 
-### 0.0.16
+### 0.0.22
+
+- **Login branding**: decodifica logos em base64 no ConfigMap/Secret (comum ao colar imagem pelo Console)
+
+### 0.0.21
+
+- **Login branding**: o operator monta o JAR da extensão (sem init container `apk`/`zip`, compatível com OpenShift restricted SCC)
+
+### 0.0.20
+
+- Corrige validação CEL de `loginBranding`: o formulário do Console pode enviar `logoSecretRef: {}` vazio ao usar ConfigMap
+
+### 0.0.19
+
+- Formulário do Console: `loginBranding` com toggle **Enable custom login branding** e seletor **Logo source** (`none` / `secret` / `configMap`)
+
+### 0.0.18
+
+- **Login branding** no CR `Guacamole`: personalize o título e o logo da tela de login via `spec.loginBranding`
+- OpenID opcional com toggle no formulário do Web Console (`openID.enabled`)
+
+### 0.0.17
 
 - **DesktopPortal**: plugin dinâmico no OpenShift Console para listar usuários Keycloak e alocar/liberar `DesktopSession`s em lote
 - **User Portal** self-service (PatternFly + Route) com login Keycloak OIDC (PKCE)
@@ -226,9 +247,9 @@ As imagens OLM do Guacamole Operator estão publicadas em **quay.io/ramoreir**:
 
 | Imagem | Uso |
 |---|---|
-| `quay.io/ramoreir/guacamole-operator-catalog:0.0.16` | CatalogSource (Operator Hub) |
-| `quay.io/ramoreir/guacamole-operator-bundle:0.0.16` | Bundle OLM (referenciado pelo catálogo) |
-| `quay.io/ramoreir/guacamole-operator:0.0.16` | Deployment do controller |
+| `quay.io/ramoreir/guacamole-operator-catalog:0.0.21` | CatalogSource (Operator Hub) |
+| `quay.io/ramoreir/guacamole-operator-bundle:0.0.21` | Bundle OLM (referenciado pelo catálogo) |
+| `quay.io/ramoreir/guacamole-operator:0.0.21` | Deployment do controller |
 
 ### CLI (recomendado)
 
@@ -255,7 +276,7 @@ oc get pods -n guacamole-operator
 O `config/olm/catalogsource.yaml` aponta para:
 
 ```yaml
-image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
+image: quay.io/ramoreir/guacamole-operator-catalog:0.0.21
 ```
 
 > **Repositório privado no Quay:** crie um `imagePullSecret` no namespace `openshift-marketplace` e associe-o ao `ServiceAccount` `default` (ou ao SA usado pelo catalog operator). Repositórios públicos não exigem esse passo.
@@ -268,7 +289,7 @@ image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
 
 ### Imagens auxiliares (DesktopPortal / métricas)
 
-O CSV referencia também imagens no mesmo registry Quay (tag `0.0.16`):
+O CSV referencia também imagens no mesmo registry Quay (tag `0.0.20`):
 
 - `quay.io/ramoreir/guacamole-metrics-exporter`
 - `quay.io/ramoreir/guacamole-desktop-portal-plugin`
@@ -351,13 +372,19 @@ spec:
     minReplicas: 1
     maxReplicas: 5
     targetMemoryUtilizationPercentage: 80
-  # Opcional — SSO Keycloak na UI do Guacamole
+  # Optional — SSO Keycloak na UI do Guacamole (omit openID entirely for MySQL users)
   # openID:
   #   enabled: true
   #   issuer: https://keycloak.apps.example.com/realms/guacamole
   #   clientID: guacamole
   #   redirectURI: https://guacamole-<ns>.apps.example.com/guacamole
   #   usernameClaimType: preferred_username
+  # Optional — customize login page title and logo (PNG recommended)
+  # loginBranding:
+  #   title: "Corp Desktop Portal"
+  #   logoSecretRef:
+  #     name: guacamole-login-logo
+  #     key: logo
 ```
 
 5. **Create**
@@ -373,7 +400,60 @@ spec:
 | `spec.route` | Expõe a UI (`path` padrão `/guacamole`, TLS edge) |
 | `spec.replicas` / `guacdReplicas` | Réplicas fixas quando HPA está desligado |
 | `spec.autoscaling` / `guacdAutoscaling` | HPA por uso de memória |
-| `spec.openID` | SSO OIDC (Keycloak) na UI do Guacamole |
+| `spec.openID` | SSO OIDC opcional — omita o bloco para login MySQL (`guacadmin`); use `openID.enabled: true` para ativar |
+| `spec.loginBranding` | Título e/ou logo personalizados na tela de login (PNG via Secret ou ConfigMap) |
+
+### Personalizar tela de login
+
+Use `spec.loginBranding` para alterar o título e o logo exibidos na página de login do Guacamole. O operator gera automaticamente uma extensão de branding e a instala no pod do Guacamole.
+
+```yaml
+spec:
+  loginBranding:
+    enabled: true
+    title: "Corp Desktop Portal"
+    logoSource: secret          # none | secret | configMap
+    logoSecretRef:
+      name: guacamole-login-logo   # Secret no mesmo namespace
+      key: logo                    # chave com bytes PNG (padrão: logo)
+```
+
+Alternativa com ConfigMap:
+
+```yaml
+    logoSource: configMap
+    logoConfigMapRef:
+      name: guacamole-login-logo
+      key: logo
+```
+
+Para alterar só o título (sem logo customizado), use `logoSource: none`.
+
+Crie o ConfigMap com a imagem (PNG recomendado):
+
+```bash
+kubectl create configmap guacamole-login-logo \
+  --from-file=logo=./meu-logo.png \
+  -n guacamole
+```
+
+> Se a imagem foi colada pelo Console do OpenShift, o ConfigMap costuma guardar o conteúdo em **base64** na chave `data` — o operator decodifica automaticamente (a partir da 0.0.22).
+
+Você pode definir só o título, só o logo, ou ambos. Após alterar o logo no Secret/ConfigMap, edite o CR `Guacamole` (por exemplo, adicione uma anotação) para forçar um novo rollout dos pods.
+
+### Formulário do Web Console
+
+Por padrão, **não inclua** `spec.openID` no manifesto — o Guacamole usa usuários do MySQL.
+
+Se criar pelo formulário em **Installed Operators → Create Guacamole**:
+
+1. Deixe **Enable OpenID Connect (SSO)** desligado (padrão).
+2. Os campos Issuer / Client ID só aparecem ao ligar o toggle.
+3. Deixe **Enable custom login branding** desligado (padrão) para manter a tela de login padrão.
+4. Com branding ligado, escolha **Logo source** (`none`, `secret` ou `configMap`); os campos de Secret/ConfigMap só aparecem para a opção escolhida.
+5. Prefira a view **YAML** se o formulário adicionar blocos `openID: {}` ou `loginBranding: {}` vazios; remova-os antes de salvar.
+
+Login inicial sem SSO: `guacadmin` / `guacadmin`.
 | `spec.metricsExporter` | Exporter Prometheus (ativado quando alguma Connection tem `exposeMetrics`) |
 
 Sample completo: [`config/samples/guacamole_v1alpha1_guacamole.yaml`](config/samples/guacamole_v1alpha1_guacamole.yaml).
@@ -651,7 +731,7 @@ oc apply -f config/olm/catalogsource.yaml
 ```
 
 ```yaml
-image: quay.io/ramoreir/guacamole-operator-catalog:0.0.16
+image: quay.io/ramoreir/guacamole-operator-catalog:0.0.21
 ```
 
 **Registry interno do OpenShift** (após build local):
@@ -837,11 +917,11 @@ O `status.connectionID` guarda o ID no MySQL para updates idempotentes. Senhas d
 
 ## Publicar uma nova versão
 
-Para publicar uma correção (ex.: `0.0.17`), partindo da versão anterior no catálogo:
+Para publicar uma correção (ex.: `0.0.18`), partindo da versão anterior no catálogo:
 
 ```bash
-export VERSION=0.0.17
-export PREVIOUS_VERSION=0.0.16
+export VERSION=0.0.18
+export PREVIOUS_VERSION=0.0.17
 
 # 1. Rebuild e push (mesmo fluxo da Fase 1 + 2)
 podman build --platform linux/amd64 -t guacamole.io/guacamole-operator:${VERSION} .

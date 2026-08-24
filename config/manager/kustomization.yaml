@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/ramoreir/guacamole-operator
-  newTag: 0.0.17
+  newTag: 0.0.22
