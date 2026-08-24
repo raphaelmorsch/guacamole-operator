@@ -52,4 +52,7 @@ func TestCSSWithLogo(t *testing.T) {
 	if !strings.Contains(css, ExtensionNamespace) || !strings.Contains(css, "background-image") {
 		t.Fatalf("unexpected css: %s", css)
 	}
+	if strings.Contains(css, "height: auto") {
+		t.Fatal("logo css must set explicit height")
+	}
 }

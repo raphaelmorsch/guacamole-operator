@@ -184,7 +184,7 @@ metadata:
     capabilities: Full Lifecycle
     categories: Networking
     containerImage: quay.io/ramoreir/guacamole-operator:0.0.16
-    createdAt: "2026-08-24T01:12:55Z"
+    createdAt: "2026-08-24T01:52:58Z"
     description: Operator to deploy Apache Guacamole on OpenShift for browser-based
       RDP/VNC/SSH access.
     operatorframework.io/cluster-monitoring: "true"
@@ -192,7 +192,7 @@ metadata:
     operators.operatorframework.io/builder: operator-sdk-v1.37.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
     repository: https://github.com/raphaelmorsch/guacamole-operator
-  name: guacamole-operator.v0.0.22
+  name: guacamole-operator.v0.0.23
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -605,18 +605,18 @@ spec:
                 - /manager
                 env:
                 - name: RELATED_IMAGE_GUACAMOLE_METRICS_EXPORTER
-                  value: quay.io/ramoreir/guacamole-metrics-exporter:0.0.22
+                  value: quay.io/ramoreir/guacamole-metrics-exporter:0.0.23
                 - name: RELATED_IMAGE_DESKTOP_PORTAL_PLUGIN
-                  value: quay.io/ramoreir/guacamole-desktop-portal-plugin:0.0.22
+                  value: quay.io/ramoreir/guacamole-desktop-portal-plugin:0.0.23
                 - name: RELATED_IMAGE_DESKTOP_PORTAL_API
-                  value: quay.io/ramoreir/guacamole-desktop-portal-api:0.0.22
+                  value: quay.io/ramoreir/guacamole-desktop-portal-api:0.0.23
                 - name: RELATED_IMAGE_DESKTOP_USER_PORTAL
-                  value: quay.io/ramoreir/guacamole-desktop-user-portal:0.0.22
+                  value: quay.io/ramoreir/guacamole-desktop-user-portal:0.0.23
                 - name: POD_NAMESPACE
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
-                image: quay.io/ramoreir/guacamole-operator:0.0.22
+                image: quay.io/ramoreir/guacamole-operator:0.0.23
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -710,12 +710,12 @@ spec:
     name: Raphael Morsch
     url: https://github.com/raphaelmorsch
   relatedImages:
-  - image: quay.io/ramoreir/guacamole-metrics-exporter:0.0.22
+  - image: quay.io/ramoreir/guacamole-metrics-exporter:0.0.23
     name: guacamole-metrics-exporter
-  - image: quay.io/ramoreir/guacamole-desktop-portal-plugin:0.0.22
+  - image: quay.io/ramoreir/guacamole-desktop-portal-plugin:0.0.23
     name: desktop-portal-plugin
-  - image: quay.io/ramoreir/guacamole-desktop-portal-api:0.0.22
+  - image: quay.io/ramoreir/guacamole-desktop-portal-api:0.0.23
     name: desktop-portal-api
-  - image: quay.io/ramoreir/guacamole-desktop-user-portal:0.0.22
+  - image: quay.io/ramoreir/guacamole-desktop-user-portal:0.0.23
     name: desktop-user-portal
-  version: 0.0.22
+  version: 0.0.23

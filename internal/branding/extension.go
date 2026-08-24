@@ -59,10 +59,16 @@ func CSS(hasLogo bool) []byte {
 		return []byte("/* Guacamole Operator login branding (title only) */\n")
 	}
 	return []byte(fmt.Sprintf(`.login-ui .login-dialog .logo {
+    display: block;
+    margin: .5em auto;
     width: 9em;
-    height: auto;
+    height: 3em;
+    min-height: 3em;
     background-size: contain;
     background-repeat: no-repeat;
+    background-position: center center;
+    -moz-background-size: contain;
+    -webkit-background-size: contain;
     background-image: url('app/ext/%s/%s');
 }
 `, ExtensionNamespace, LogoResourcePath))
