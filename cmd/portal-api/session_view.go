@@ -192,12 +192,10 @@ func enrichSession(
 			routeURL = view.RouteURL
 		}
 	}
-	connName, _, _ := unstructured.NestedString(obj.Object, "status", "connectionName")
-	if connName == "" {
-		connName = obj.GetName()
-	}
+	// GuacamoleConnection CR name matches DesktopSession name. status.connectionName
+	// is the Guacamole display name in MySQL, not the Kubernetes resource name.
 	var connID int64
-	if id, err := getConnectionID(ctx, dyn, connectionsGVR, obj.GetNamespace(), connName); err == nil {
+	if id, err := getConnectionID(ctx, dyn, connectionsGVR, obj.GetNamespace(), obj.GetName()); err == nil {
 		connID = id
 	}
 	return buildSessionView(obj, routeURL, connID)

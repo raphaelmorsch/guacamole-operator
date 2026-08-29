@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-post-config
+  namespace: rdp
+data:
+  configure.sh: |
+    #!/bin/sh
+    set -eu
+    KC_HOST="${KC_HOST:-https://keycloak-ingress-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io}"
+    REALM=guacamole
+    ADMIN_USER=$(cat /secrets/username)
+    ADMIN_PASS=$(cat /secrets/password)
+
+    apk add --no-cache curl jq >/dev/null
+
+    echo "Getting admin token..."
+    TOKEN=$(curl -sk -X POST "$KC_HOST/realms/master/protocol/openid-connect/token" \
+      -d "client_id=admin-cli" \
+      -d "username=$ADMIN_USER" \
+      -d "password=$ADMIN_PASS" \
+      -d "grant_type=password" | jq -r .access_token)
+    if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+      echo "Failed to obtain admin token" >&2
+      exit 1
+    fi
+
+    auth() { echo "Authorization: Bearer $TOKEN"; }
+
+    echo "Resolving realm-management client..."
+    RM_ID=$(curl -sk -H "$(auth)" \
+      "$KC_HOST/admin/realms/$REALM/clients?clientId=realm-management" | jq -r '.[0].id')
+    PORTAL_ID=$(curl -sk -H "$(auth)" \
+      "$KC_HOST/admin/realms/$REALM/clients?clientId=guacamole-desktop-portal" | jq -r '.[0].id')
+    SA_USER=$(curl -sk -H "$(auth)" \
+      "$KC_HOST/admin/realms/$REALM/clients/$PORTAL_ID/service-account-user" | jq -r .id)
+
+    echo "Fetching realm-management roles view-users + query-users..."
+    ROLES=$(curl -sk -H "$(auth)" \
+      "$KC_HOST/admin/realms/$REALM/clients/$RM_ID/roles" | \
+      jq '[.[] | select(.name=="view-users" or .name=="query-users")]')
+
+    echo "Assigning service account roles to guacamole-desktop-portal..."
+    curl -sk -X POST -H "$(auth)" -H "Content-Type: application/json" \
+      -d "$ROLES" \
+      "$KC_HOST/admin/realms/$REALM/users/$SA_USER/role-mappings/clients/$RM_ID"
+
+    echo "Post-config complete."
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-post-config
+  namespace: rdp
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: configure
+          image: alpine:3.20
+          command: ["/bin/sh", "/scripts/configure.sh"]
+          env:
+            - name: KC_HOST
+              value: https://keycloak-ingress-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: admin
+              mountPath: /secrets
+      volumes:
+        - name: scripts
+          configMap:
+            name: keycloak-post-config
+            defaultMode: 0755
+        - name: admin
+          secret:
+            secretName: keycloak-initial-admin

@@ -1,0 +1,105 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: guacamole-realm
+  namespace: rdp
+spec:
+  keycloakCRName: keycloak
+  realm:
+    id: guacamole
+    realm: guacamole
+    displayName: Guacamole Desktop
+    enabled: true
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    duplicateEmailsAllowed: false
+    resetPasswordAllowed: true
+    editUsernameAllowed: false
+    sslRequired: external
+    users:
+      - username: joao
+        enabled: true
+        emailVerified: true
+        firstName: Joao
+        lastName: Silva
+        email: joao@example.com
+        credentials:
+          - type: password
+            value: RedHat123!
+            temporary: false
+      - username: maria
+        enabled: true
+        emailVerified: true
+        firstName: Maria
+        lastName: Santos
+        email: maria@example.com
+        credentials:
+          - type: password
+            value: RedHat123!
+            temporary: false
+      - username: admin
+        enabled: true
+        emailVerified: true
+        firstName: Desktop
+        lastName: Admin
+        email: admin@example.com
+        credentials:
+          - type: password
+            value: RedHat123!
+            temporary: false
+      - username: guacadmin
+        enabled: true
+        emailVerified: true
+        firstName: Guacamole
+        lastName: Administrator
+        email: guacadmin@example.com
+        credentials:
+          - type: password
+            value: RedHat123!
+            temporary: false
+    clients:
+      - clientId: guacamole
+        name: Guacamole SSO
+        enabled: true
+        clientAuthenticatorType: client-secret
+        secret: b190d7844050629582f9009ad00c9428
+        redirectUris:
+          - https://gateway-guacamole-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io/guacamole
+          - https://gateway-guacamole-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io/guacamole/*
+        webOrigins:
+          - https://gateway-guacamole-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io
+        publicClient: false
+        standardFlowEnabled: true
+        # Guacamole 1.6 OpenID extension uses implicit flow (response_type=id_token).
+        implicitFlowEnabled: true
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        protocol: openid-connect
+      - clientId: guacamole-desktop-portal
+        name: Desktop Portal Admin API
+        enabled: true
+        clientAuthenticatorType: client-secret
+        secret: 31c8be626e54ba80260516bf91caaf35
+        publicClient: false
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: true
+        protocol: openid-connect
+      - clientId: guacamole-user-portal
+        name: Desktop User Portal
+        enabled: true
+        publicClient: true
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        redirectUris:
+          - https://desktop-portal-portal-user-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io
+          - https://desktop-portal-portal-user-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io/
+          - https://desktop-portal-portal-user-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io/*
+          - https://*-rdp.apps.cluster-k7vlv.dyn.redhatworkshops.io/*
+        webOrigins:
+          - "+"
+        attributes:
+          pkce.code.challenge.method: S256
+        protocol: openid-connect

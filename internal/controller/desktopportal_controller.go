@@ -449,6 +449,11 @@ func (r *DesktopPortalReconciler) ensureSessionRBAC(ctx context.Context, portal 
 				Resources: []string{"guacamoleconnections"},
 				Verbs:     []string{"get", "list", "watch"},
 			},
+			{
+				APIGroups: []string{"guacamole.guacamole.io"},
+				Resources: []string{"guacamoles"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
 		}
 		return nil
 	})
